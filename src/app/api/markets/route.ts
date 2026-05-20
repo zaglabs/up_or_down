@@ -3,7 +3,7 @@ import { fetchUpDownMarkets } from "@/lib/polymarket/gamma";
 import type { MarketCategory } from "@/lib/polymarket/types";
 
 export const runtime = "nodejs";
-export const revalidate = 60;
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

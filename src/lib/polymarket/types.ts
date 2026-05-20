@@ -15,14 +15,17 @@ export interface GammaMarket {
   endDateIso: string;
   active: boolean;
   closed: boolean;
-  tokens: GammaToken[];
+  // The list endpoint returns outcomes/prices/tokenIds as JSON strings, not a tokens array.
+  tokens?: GammaToken[];       // only present on individual market fetches
+  outcomes?: string;           // JSON string: '["Yes","No"]' or '["Up","Down"]'
+  outcomePrices: string;       // JSON string: '["0.535","0.465"]'
+  clobTokenIds?: string;       // JSON string: '["1234...","5678..."]'
   tags: string[];
   category: string;
   volume: string;
   liquidity: string;
   startDate: string;
   endDate: string;
-  outcomePrices: string;
   negRisk: boolean;
   icon?: string;
 }
