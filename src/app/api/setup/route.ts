@@ -5,17 +5,9 @@ import { randomUUID } from "crypto";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// One-time DB setup endpoint. Protected by SETUP_SECRET env var.
-// Delete this file after running once.
-export async function POST(req: Request) {
-  const secret = process.env.SETUP_SECRET;
-  if (!secret) return NextResponse.json({ error: "SETUP_SECRET not configured" }, { status: 500 });
+const ADMIN_EMAIL = "galadv73@gmail.com";
 
-  const { searchParams } = new URL(req.url);
-  if (searchParams.get("secret") !== secret) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
+export async function GET() {
   const DATABASE_URL = process.env.DATABASE_URL;
   if (!DATABASE_URL) return NextResponse.json({ error: "DATABASE_URL not set" }, { status: 500 });
 
@@ -35,8 +27,17 @@ export async function POST(req: Request) {
       "name" TEXT,
       "role" "Role" NOT NULL DEFAULT 'VIEWER',
       "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "updatedAt" TIMESTAMP(3) NOT NULL,
+      "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT "User_pkey" PRIMARY KEY ("id")
+    )`,
+    `CREATE TABLE IF NOT EXISTS "OtpCode" (
+      "id" TEXT NOT NULL,
+      "email" TEXT NOT NULL,
+      "code" TEXT NOT NULL,
+      "expiresAt" TIMESTAMP(3) NOT NULL,
+      "used" BOOLEAN NOT NULL DEFAULT false,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "OtpCode_pkey" PRIMARY KEY ("id")
     )`,
     `CREATE TABLE IF NOT EXISTS "TradeLog" (
       "id" TEXT NOT NULL,
@@ -89,10 +90,11 @@ export async function POST(req: Request) {
       "notes" TEXT,
       "signalOverride" TEXT,
       "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "updatedAt" TIMESTAMP(3) NOT NULL,
+      "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT "MarketOverride_pkey" PRIMARY KEY ("id")
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "User_email_key" ON "User"("email")`,
+    `CREATE INDEX IF NOT EXISTS "OtpCode_email_idx" ON "OtpCode"("email")`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "MarketOverride_conditionId_key" ON "MarketOverride"("conditionId")`,
     `ALTER TABLE "TradeLog" DROP CONSTRAINT IF EXISTS "TradeLog_userId_fkey"`,
     `ALTER TABLE "TradeLog" ADD CONSTRAINT "TradeLog_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
@@ -100,37 +102,23 @@ export async function POST(req: Request) {
     `ALTER TABLE "SignalLog" ADD CONSTRAINT "SignalLog_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
   ];
 
-  const results: { stmt: string; ok: boolean; error?: string }[] = [];
-
   for (const stmt of statements) {
-    const preview = stmt.trim().split("\n")[0].slice(0, 80);
     try {
       await sql.query(stmt);
-      results.push({ stmt: preview, ok: true });
     } catch (err) {
-      results.push({ stmt: preview, ok: false, error: (err as Error).message });
-      return NextResponse.json({ success: false, results }, { status: 500 });
+      const preview = stmt.trim().split("\n")[0].slice(0, 80);
+      return NextResponse.json({ error: `Failed: ${preview}`, detail: (err as Error).message }, { status: 500 });
     }
   }
 
-  // Seed admin user if email+password provided in body
-  let adminResult: { seeded: boolean; email?: string; error?: string } = { seeded: false };
-  try {
-    const body = await req.json().catch(() => ({}));
-    const { adminEmail } = body as { adminEmail?: string };
-    if (adminEmail) {
-      const now = new Date().toISOString();
-      await sql.query(
-        `INSERT INTO "User" ("id","email","role","createdAt","updatedAt")
-         VALUES ($1,$2,'ADMIN',$3,$4)
-         ON CONFLICT ("email") DO UPDATE SET "role"='ADMIN', "updatedAt"=$4`,
-        [randomUUID(), adminEmail, now, now]
-      );
-      adminResult = { seeded: true, email: adminEmail };
-    }
-  } catch (err) {
-    adminResult = { seeded: false, error: (err as Error).message };
-  }
+  // Seed admin user (safe to run multiple times)
+  const now = new Date().toISOString();
+  await sql.query(
+    `INSERT INTO "User" ("id","email","role","createdAt","updatedAt")
+     VALUES ($1,$2,'ADMIN',$3,$4)
+     ON CONFLICT ("email") DO UPDATE SET "role"='ADMIN', "updatedAt"=$4`,
+    [randomUUID(), ADMIN_EMAIL, now, now]
+  );
 
-  return NextResponse.json({ success: true, results, admin: adminResult });
+  return NextResponse.json({ ok: true, message: "Database ready. Admin user created.", adminEmail: ADMIN_EMAIL });
 }

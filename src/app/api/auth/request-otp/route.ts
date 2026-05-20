@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { SignJWT } from "jose";
 import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -16,15 +15,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No account found for this email" }, { status: 404 });
   }
 
-  const code = String(Math.floor(100000 + Math.random() * 900000));
-  const secret = new TextEncoder().encode(process.env.AUTH_SECRET ?? "dev-secret");
+  // Delete expired or old unused codes for this email
+  await db.otpCode.deleteMany({
+    where: { email, OR: [{ expiresAt: { lt: new Date() } }, { used: true }] },
+  });
 
-  const token = await new SignJWT({ email, code })
-    .setProtectedHeader({ alg: "HS256" })
-    .setExpirationTime("10m")
-    .sign(secret);
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+  await db.otpCode.create({ data: { email, code, expiresAt } });
 
   // Mock: return the code so the UI can display it.
-  // In production, send via email and omit `code` from the response.
-  return NextResponse.json({ token, code });
+  // Replace with email delivery (Resend, SendGrid, etc.) when ready.
+  return NextResponse.json({ code });
 }

@@ -11,7 +11,6 @@ function LoginForm() {
 
   const [step, setStep] = useState<"email" | "otp">("email");
   const [email, setEmail] = useState("");
-  const [otpToken, setOtpToken] = useState("");
   const [mockCode, setMockCode] = useState("");
   const [enteredCode, setEnteredCode] = useState("");
   const [error, setError] = useState("");
@@ -32,8 +31,7 @@ function LoginForm() {
       setError(data.error ?? "Failed to send code");
       return;
     }
-    const { token, code } = await res.json();
-    setOtpToken(token);
+    const { code } = await res.json();
     setMockCode(code);
     setStep("otp");
   };
@@ -42,12 +40,7 @@ function LoginForm() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const res = await signIn("credentials", {
-      email,
-      code: enteredCode,
-      token: otpToken,
-      redirect: false,
-    });
+    const res = await signIn("credentials", { email, code: enteredCode, redirect: false });
     setLoading(false);
     if (res?.error) {
       setError("Invalid or expired code. Try again.");
@@ -104,7 +97,6 @@ function LoginForm() {
             setError("");
             setMockCode("");
             setEnteredCode("");
-            setOtpToken("");
           }}
           className="w-full text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
         >
