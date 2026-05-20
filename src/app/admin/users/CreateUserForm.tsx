@@ -5,7 +5,6 @@ import { useState } from "react";
 export function CreateUserForm() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
   const [role, setRole] = useState<"ADMIN" | "TRADER" | "VIEWER">("VIEWER");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -17,14 +16,14 @@ export function CreateUserForm() {
     const res = await fetch("/api/admin/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, name, password, role }),
+      body: JSON.stringify({ email, name, role }),
     });
     setLoading(false);
     if (!res.ok) {
       const d = await res.json();
       setError(d.error ?? "Failed to create user");
     } else {
-      setEmail(""); setName(""); setPassword(""); setRole("VIEWER");
+      setEmail(""); setName(""); setRole("VIEWER");
       window.location.reload();
     }
   };
@@ -32,7 +31,7 @@ export function CreateUserForm() {
   return (
     <form onSubmit={handleSubmit} className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
       <p className="text-xs font-medium text-zinc-400 mb-3">Create New User</p>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <input
           type="email" placeholder="Email" value={email}
           onChange={(e) => setEmail(e.target.value)} required
@@ -41,11 +40,6 @@ export function CreateUserForm() {
         <input
           type="text" placeholder="Name (optional)" value={name}
           onChange={(e) => setName(e.target.value)}
-          className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
-        />
-        <input
-          type="password" placeholder="Password" value={password}
-          onChange={(e) => setPassword(e.target.value)} required
           className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
         />
         <select

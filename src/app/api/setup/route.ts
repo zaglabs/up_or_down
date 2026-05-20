@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
-import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 
 export const runtime = "nodejs";
@@ -32,7 +31,7 @@ export async function POST(req: Request) {
     `CREATE TABLE IF NOT EXISTS "User" (
       "id" TEXT NOT NULL,
       "email" TEXT NOT NULL,
-      "passwordHash" TEXT NOT NULL,
+      "passwordHash" TEXT,
       "name" TEXT,
       "role" "Role" NOT NULL DEFAULT 'VIEWER',
       "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -118,15 +117,14 @@ export async function POST(req: Request) {
   let adminResult: { seeded: boolean; email?: string; error?: string } = { seeded: false };
   try {
     const body = await req.json().catch(() => ({}));
-    const { adminEmail, adminPassword } = body as { adminEmail?: string; adminPassword?: string };
-    if (adminEmail && adminPassword) {
-      const hash = await bcrypt.hash(adminPassword, 12);
+    const { adminEmail } = body as { adminEmail?: string };
+    if (adminEmail) {
       const now = new Date().toISOString();
       await sql.query(
-        `INSERT INTO "User" ("id","email","passwordHash","role","createdAt","updatedAt")
-         VALUES ($1,$2,$3,'ADMIN',$4,$5)
-         ON CONFLICT ("email") DO UPDATE SET "passwordHash"=$3, "role"='ADMIN', "updatedAt"=$5`,
-        [randomUUID(), adminEmail, hash, now, now]
+        `INSERT INTO "User" ("id","email","role","createdAt","updatedAt")
+         VALUES ($1,$2,'ADMIN',$3,$4)
+         ON CONFLICT ("email") DO UPDATE SET "role"='ADMIN', "updatedAt"=$4`,
+        [randomUUID(), adminEmail, now, now]
       );
       adminResult = { seeded: true, email: adminEmail };
     }
