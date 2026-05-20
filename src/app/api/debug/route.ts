@@ -39,11 +39,12 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const tag = searchParams.get("tag") ?? "crypto";
 
-  const [marketsResult, eventsResult, noTagResult] = await Promise.all([
+  const updownTag = tag === "crypto" ? "btc-updown" : `${tag}-updown`;
+  const [marketsResult, eventsResult, updownResult] = await Promise.all([
     probe(`${GAMMA_BASE}/markets?active=true&closed=false&limit=20&tag_slug=${tag}`),
     probe(`${GAMMA_BASE}/events?active=true&closed=false&limit=10&tag_slug=${tag}`),
-    probe(`${GAMMA_BASE}/markets?active=true&closed=false&limit=5`),
+    probe(`${GAMMA_BASE}/markets?active=true&closed=false&limit=20&tag_slug=${updownTag}`),
   ]);
 
-  return NextResponse.json({ tag, marketsResult, eventsResult, noTagResult });
+  return NextResponse.json({ tag, marketsResult, eventsResult, updownResult });
 }

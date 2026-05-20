@@ -149,11 +149,11 @@ async function fetchGammaEvents(tagSlug: string): Promise<GammaMarket[]> {
   }
 }
 
-// Tag slugs to probe for each category. Polymarket's "crypto" tag includes broad
-// crypto-culture content; the more specific asset tags tend to surface price markets.
+// Polymarket "up or down" price markets use the pattern <asset>-updown.
+// The generic "crypto" tag returns broad crypto-culture content, not price markets.
 const CATEGORY_TAGS: Record<"crypto" | "finance", string[]> = {
-  crypto: ["crypto", "btc", "eth", "sol", "cryptocurrency"],
-  finance: ["financials", "economics", "finance", "gold", "commodities"],
+  crypto: ["btc-updown", "eth-updown", "sol-updown", "doge-updown", "bnb-updown", "xrp-updown", "crypto"],
+  finance: ["gold-updown", "spx-updown", "oil-updown", "financials", "economics"],
 };
 
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
