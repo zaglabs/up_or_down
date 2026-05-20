@@ -2,27 +2,11 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
-import type { Role } from "@prisma/client";
+import { edgeAuthConfig } from "./edge-config";
 
+// Full Node.js config — includes Prisma + bcryptjs. NOT imported by middleware.
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
-  pages: { signIn: "/login" },
-  callbacks: {
-    jwt({ token, user }) {
-      if (user) {
-        token.id = user.id;
-        token.role = (user as unknown as { role: Role }).role;
-      }
-      return token;
-    },
-    session({ session, token }) {
-      if (session.user) {
-        session.user.id = token.id as string;
-        (session.user as { role: Role }).role = token.role as Role;
-      }
-      return session;
-    },
-  },
+  ...edgeAuthConfig,
   providers: [
     Credentials({
       credentials: {
@@ -37,7 +21,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!user) return null;
         const ok = await bcrypt.compare(String(credentials.password), user.passwordHash);
         if (!ok) return null;
-        return { id: user.id, email: user.email, name: user.name, role: user.role };
+        return { id: user.id, email: user.email, name: user.name ?? null, role: user.role };
       },
     }),
   ],
