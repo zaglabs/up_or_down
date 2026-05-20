@@ -20,19 +20,24 @@ function LoginForm() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const res = await fetch("/api/auth/request-otp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    });
-    const data = await res.json();
-    setLoading(false);
-    if (!res.ok) {
-      setError(data.error ?? "No account found for this email");
-      return;
+    try {
+      const res = await fetch("/api/auth/request-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No account found for this email");
+      } else {
+        setMockCode(data.code);
+        setStep("otp");
+      }
+    } catch {
+      setError("Could not reach server. Please try again.");
+    } finally {
+      setLoading(false);
     }
-    setMockCode(data.code);
-    setStep("otp");
   };
 
   const verify = async (e: React.FormEvent) => {

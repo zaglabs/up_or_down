@@ -97,6 +97,17 @@ export async function GET() {
         CONSTRAINT "MarketOverride_pkey" PRIMARY KEY ("id")
       )`,
       `CREATE UNIQUE INDEX IF NOT EXISTS "User_email_key" ON "User"("email")`,
+      // Patch columns in case table existed from a previous partial run
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "passwordHash" TEXT`,
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "name" TEXT`,
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'Role') THEN
+           CREATE TYPE "Role" AS ENUM ('ADMIN', 'TRADER', 'VIEWER');
+         END IF;
+       END $$`,
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "role" "Role" NOT NULL DEFAULT 'VIEWER'`,
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`,
       `CREATE INDEX IF NOT EXISTS "OtpCode_email_idx" ON "OtpCode"("email")`,
       `CREATE UNIQUE INDEX IF NOT EXISTS "MarketOverride_conditionId_key" ON "MarketOverride"("conditionId")`,
       `ALTER TABLE "TradeLog" DROP CONSTRAINT IF EXISTS "TradeLog_userId_fkey"`,
