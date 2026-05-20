@@ -2,24 +2,42 @@ import type { GammaMarket, UpDownMarket, MarketCategory, MarketPeriod } from "./
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
-// Strict patterns: only directional outcomes, not generic yes/no
-const UP_PATTERNS = /^(up|higher|above|over|bullish)$/i;
-const DOWN_PATTERNS = /^(down|lower|below|under|bearish)$/i;
+// Directional outcomes: "Up", "Higher", "Above", etc.
+const UP_DIRECTIONAL = /^(up|higher|above|over|bullish)$/i;
+const DOWN_DIRECTIONAL = /^(down|lower|below|under|bearish)$/i;
+
+// Price-direction language that makes a Yes/No market an "up or down" market
+const PRICE_DIRECTION_RE =
+  /\b(higher|lower|above|below|go up|go down|up or down|increase|decrease|more than|less than|over|under)\b/i;
 
 function isUpDownMarket(market: GammaMarket): boolean {
   if (!market.tokens || market.tokens.length !== 2) return false;
+
   const outcomes = market.tokens.map((t) => t.outcome.trim());
-  return (
-    outcomes.some((o) => UP_PATTERNS.test(o)) &&
-    outcomes.some((o) => DOWN_PATTERNS.test(o))
-  );
+
+  // Case 1: outcomes are explicitly directional ("Higher"/"Lower", "Up"/"Down", etc.)
+  if (
+    outcomes.some((o) => UP_DIRECTIONAL.test(o)) &&
+    outcomes.some((o) => DOWN_DIRECTIONAL.test(o))
+  ) {
+    return true;
+  }
+
+  // Case 2: Yes/No market whose question is about price direction
+  const isYesNo =
+    outcomes.some((o) => /^yes$/i.test(o)) && outcomes.some((o) => /^no$/i.test(o));
+  if (isYesNo && PRICE_DIRECTION_RE.test(market.question)) {
+    return true;
+  }
+
+  return false;
 }
 
 function parseAsset(question: string): string {
   const patterns = [
     /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB|PEPE|SHIB|ARB|OP|SUI|APT|INJ|WIF|BONK)\b/i,
     /\b(bitcoin|ethereum|solana|dogecoin|cardano|polygon|avalanche|chainlink|polkadot|uniswap|ripple|litecoin|binance)\b/i,
-    /\b(S&P|SPX|SPY|nasdaq|NDX|gold|oil|EUR|GBP|JPY|crude|silver|qqq|dow)\b/i,
+    /\b(S&P|SPX|SPY|nasdaq|NDX|gold|oil|EUR|GBP|JPY|crude|silver|QQQ|dow)\b/i,
   ];
   for (const p of patterns) {
     const m = question.match(p);
@@ -38,7 +56,6 @@ function parsePeriod(question: string, endDate: string, startDate: string): Mark
   if (q.includes("daily") || q.includes("1 day") || q.includes("today") || q.includes("24h")) return "1d";
   if (q.includes("weekly") || q.includes("1 week") || q.includes("7 day")) return "1w";
 
-  // Estimate from date range
   try {
     const start = new Date(startDate).getTime();
     const end = new Date(endDate).getTime();
@@ -55,17 +72,27 @@ function parsePeriod(question: string, endDate: string, startDate: string): Mark
 function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownMarket | null {
   if (!isUpDownMarket(market)) return null;
 
-  const upToken = market.tokens.find((t) => UP_PATTERNS.test(t.outcome.trim()));
-  const downToken = market.tokens.find((t) => DOWN_PATTERNS.test(t.outcome.trim()));
-  if (!upToken || !downToken) return null;
+  const outcomes = market.tokens.map((t) => t.outcome.trim());
+
+  // Resolve which token is "up" — prefer explicit directional, fallback to Yes
+  const upToken =
+    market.tokens.find((t) => UP_DIRECTIONAL.test(t.outcome.trim())) ??
+    market.tokens.find((t) => /^yes$/i.test(t.outcome.trim()));
+  const downToken =
+    market.tokens.find((t) => DOWN_DIRECTIONAL.test(t.outcome.trim())) ??
+    market.tokens.find((t) => /^no$/i.test(t.outcome.trim()));
+
+  if (!upToken || !downToken || upToken.tokenId === downToken.tokenId) return null;
 
   let outcomePrices: string[] = [];
   try {
     outcomePrices = JSON.parse(market.outcomePrices || "[]");
   } catch {}
 
-  const upPrice = upToken.price ?? parseFloat(outcomePrices[0] ?? "0.5");
-  const downPrice = downToken.price ?? parseFloat(outcomePrices[1] ?? "0.5");
+  const upIdx = outcomes.indexOf(upToken.outcome.trim());
+  const upPrice = upToken.price ?? parseFloat(outcomePrices[upIdx] ?? "0.5");
+  const downIdx = outcomes.indexOf(downToken.outcome.trim());
+  const downPrice = downToken.price ?? parseFloat(outcomePrices[downIdx] ?? "0.5");
 
   return {
     conditionId: market.conditionId,
@@ -85,13 +112,11 @@ function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownM
   };
 }
 
-interface FetchOptions {
+async function fetchGammaPage(opts: {
   tagSlug?: string;
   query?: string;
   limit?: number;
-}
-
-async function fetchGammaMarkets(opts: FetchOptions): Promise<GammaMarket[]> {
+}): Promise<GammaMarket[]> {
   const url = new URL(`${GAMMA_BASE}/markets`);
   if (opts.tagSlug) url.searchParams.set("tag_slug", opts.tagSlug);
   if (opts.query) url.searchParams.set("q", opts.query);
@@ -106,52 +131,45 @@ async function fetchGammaMarkets(opts: FetchOptions): Promise<GammaMarket[]> {
     });
 
     if (!res.ok) {
-      console.error(`Gamma API error: ${res.status} for ${url.toString()}`);
+      console.warn(`[gamma] ${res.status} for ${url.search}`);
       return [];
     }
 
     const data = await res.json();
     return Array.isArray(data) ? data : (data.markets ?? []);
   } catch (err) {
-    console.error(`Gamma API fetch failed: ${err}`);
+    console.warn(`[gamma] fetch failed: ${err}`);
     return [];
   }
 }
 
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  // Build search strategies: tag-based + text search for "up or down" markets
-  type Strategy = { opts: FetchOptions; cat: MarketCategory };
+  type Strategy = { opts: Parameters<typeof fetchGammaPage>[0]; cat: MarketCategory };
+
+  const allStrategies: Strategy[] = [
+    // Tag-based — broad crypto / finance categories
+    { opts: { tagSlug: "crypto" }, cat: "crypto" },
+    { opts: { tagSlug: "financials" }, cat: "finance" },
+    { opts: { tagSlug: "economics" }, cat: "finance" },
+    // Text search targeting common "up or down" question phrasing
+    { opts: { query: "higher or lower" }, cat: "crypto" },
+    { opts: { query: "up or down" }, cat: "crypto" },
+    { opts: { query: "higher than" }, cat: "crypto" },
+    { opts: { query: "will bitcoin go" }, cat: "crypto" },
+    { opts: { query: "will eth go" }, cat: "crypto" },
+    { opts: { query: "higher or lower finance" }, cat: "finance" },
+  ];
 
   const strategies: Strategy[] = category
-    ? category === "crypto"
-      ? [
-          { opts: { tagSlug: "crypto" }, cat: "crypto" },
-          { opts: { tagSlug: "up-or-down" }, cat: "crypto" },
-          { opts: { query: "up or down crypto" }, cat: "crypto" },
-          { opts: { query: "higher or lower crypto" }, cat: "crypto" },
-        ]
-      : [
-          { opts: { tagSlug: "financials" }, cat: "finance" },
-          { opts: { tagSlug: "economics" }, cat: "finance" },
-          { opts: { query: "up or down" }, cat: "finance" },
-        ]
-    : [
-        // Crypto: tag-based + text search
-        { opts: { tagSlug: "crypto" }, cat: "crypto" },
-        { opts: { tagSlug: "up-or-down" }, cat: "crypto" },
-        { opts: { query: "will bitcoin go higher or lower" }, cat: "crypto" },
-        { opts: { query: "will eth go higher or lower" }, cat: "crypto" },
-        { opts: { query: "up or down crypto" }, cat: "crypto" },
-        // Finance: tag-based + text search
-        { opts: { tagSlug: "financials" }, cat: "finance" },
-        { opts: { tagSlug: "economics" }, cat: "finance" },
-        { opts: { query: "up or down finance" }, cat: "finance" },
-      ];
+    ? allStrategies.filter((s) => s.cat === category)
+    : allStrategies;
 
   const results = await Promise.allSettled(
     strategies.map(({ opts, cat }) =>
-      fetchGammaMarkets(opts).then((markets) =>
-        markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
+      fetchGammaPage(opts).then((markets) =>
+        markets
+          .map((m) => normalizeMarket(m, cat))
+          .filter((m): m is UpDownMarket => m !== null)
       )
     )
   );
@@ -161,7 +179,7 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
     if (r.status === "fulfilled") all.push(...r.value);
   }
 
-  // Deduplicate by conditionId, prefer higher liquidity entries
+  // Deduplicate — prefer higher liquidity when same market appears from multiple searches
   const byId = new Map<string, UpDownMarket>();
   for (const m of all) {
     const existing = byId.get(m.conditionId);
@@ -170,7 +188,7 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
     }
   }
 
-  // Sort by liquidity descending so most active markets appear first
+  // Most liquid markets first
   return Array.from(byId.values()).sort((a, b) => b.liquidity - a.liquidity);
 }
 
