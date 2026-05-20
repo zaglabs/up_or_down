@@ -5,5 +5,5 @@ export default NextAuth(edgeAuthConfig).auth;
 
 export const config = {
   // Protect everything except login, setup, auth callbacks, and Next.js internals
-  matcher: ["/((?!login|setup|api/auth|api/setup|_next|favicon\\.ico).*)"],
+  matcher: ["/((?!login|register|setup|api/auth|api/setup|api/register|_next|favicon\\.ico).*)"],
 };

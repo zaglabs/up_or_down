@@ -5,12 +5,20 @@ import { CreateUserForm } from "./CreateUserForm";
 export const dynamic = "force-dynamic";
 
 export default async function UsersPage() {
-  const users = await db.user.findMany({ orderBy: { createdAt: "desc" } });
+  const users = await db.user.findMany({ orderBy: [{ status: "asc" }, { createdAt: "desc" }] });
+  const pending = users.filter((u) => u.status === "PENDING").length;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-zinc-100">Users</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-zinc-100">Users</h1>
+          {pending > 0 && (
+            <span className="rounded-full bg-amber-500 px-2 py-0.5 text-xs font-bold text-zinc-900">
+              {pending} pending
+            </span>
+          )}
+        </div>
       </div>
 
       <CreateUserForm />
@@ -22,6 +30,7 @@ export default async function UsersPage() {
               <th className="px-4 py-3 text-left text-xs text-zinc-500 font-medium">Email</th>
               <th className="px-4 py-3 text-left text-xs text-zinc-500 font-medium">Name</th>
               <th className="px-4 py-3 text-left text-xs text-zinc-500 font-medium">Role</th>
+              <th className="px-4 py-3 text-left text-xs text-zinc-500 font-medium">Status</th>
               <th className="px-4 py-3 text-left text-xs text-zinc-500 font-medium">Created</th>
               <th className="px-4 py-3 text-right text-xs text-zinc-500 font-medium">Actions</th>
             </tr>
@@ -32,8 +41,8 @@ export default async function UsersPage() {
             ))}
             {users.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-zinc-600">
-                  No users yet. Create one above.
+                <td colSpan={6} className="px-4 py-8 text-center text-zinc-600">
+                  No users yet.
                 </td>
               </tr>
             )}

@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 
 function LoginForm() {
   const router = useRouter();
@@ -89,6 +90,12 @@ function LoginForm() {
           >
             {loading ? "Sending…" : "Send code"}
           </button>
+          <p className="text-center text-xs text-zinc-600">
+            Don&apos;t have access?{" "}
+            <Link href="/register" className="text-zinc-400 hover:text-zinc-200">
+              Request access
+            </Link>
+          </p>
         </form>
       ) : (
         <form onSubmit={verify} className="space-y-4">

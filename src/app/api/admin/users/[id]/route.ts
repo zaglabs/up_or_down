@@ -10,11 +10,14 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const { role } = await req.json();
+  const body = await req.json();
+  const data: Record<string, string> = {};
+  if (body.role) data.role = body.role;
+  if (body.status) data.status = body.status;
   const user = await db.user.update({
     where: { id: params.id },
-    data: { role },
-    select: { id: true, email: true, role: true },
+    data,
+    select: { id: true, email: true, role: true, status: true },
   });
   return NextResponse.json(user);
 }

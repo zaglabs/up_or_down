@@ -23,6 +23,11 @@ export async function GET() {
            CREATE TYPE "Role" AS ENUM ('ADMIN', 'TRADER', 'VIEWER');
          END IF;
        END $$`,
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'UserStatus') THEN
+           CREATE TYPE "UserStatus" AS ENUM ('PENDING', 'ACTIVE', 'DISABLED');
+         END IF;
+       END $$`,
       `CREATE TABLE IF NOT EXISTS "User" (
         "id" TEXT NOT NULL,
         "email" TEXT NOT NULL,
@@ -105,7 +110,13 @@ export async function GET() {
            CREATE TYPE "Role" AS ENUM ('ADMIN', 'TRADER', 'VIEWER');
          END IF;
        END $$`,
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'UserStatus') THEN
+           CREATE TYPE "UserStatus" AS ENUM ('PENDING', 'ACTIVE', 'DISABLED');
+         END IF;
+       END $$`,
       `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "role" "Role" NOT NULL DEFAULT 'VIEWER'`,
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "status" "UserStatus" NOT NULL DEFAULT 'PENDING'`,
       `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`,
       `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`,
       `CREATE INDEX IF NOT EXISTS "OtpCode_email_idx" ON "OtpCode"("email")`,
@@ -122,9 +133,9 @@ export async function GET() {
 
     const now = new Date().toISOString();
     await sql.query(
-      `INSERT INTO "User" ("id","email","role","createdAt","updatedAt")
-       VALUES ($1,$2,'ADMIN',$3,$4)
-       ON CONFLICT ("email") DO UPDATE SET "role"='ADMIN', "updatedAt"=$4`,
+      `INSERT INTO "User" ("id","email","role","status","createdAt","updatedAt")
+       VALUES ($1,$2,'ADMIN','ACTIVE',$3,$4)
+       ON CONFLICT ("email") DO UPDATE SET "role"='ADMIN', "status"='ACTIVE', "updatedAt"=$4`,
       [randomUUID(), ADMIN_EMAIL, now, now]
     );
 

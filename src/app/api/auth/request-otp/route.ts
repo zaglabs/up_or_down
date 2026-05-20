@@ -15,6 +15,12 @@ export async function POST(req: Request) {
     if (!user) {
       return NextResponse.json({ error: "No account found for this email" }, { status: 404 });
     }
+    if (user.status === "PENDING") {
+      return NextResponse.json({ error: "Your account is pending approval. You'll be notified once an admin approves your request." }, { status: 403 });
+    }
+    if (user.status === "DISABLED") {
+      return NextResponse.json({ error: "Your account has been disabled. Contact the admin." }, { status: 403 });
+    }
 
     await db.otpCode.deleteMany({
       where: { email, OR: [{ expiresAt: { lt: new Date() } }, { used: true }] },
