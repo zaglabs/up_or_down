@@ -15,8 +15,14 @@ const BROWSER_HEADERS = {
 };
 
 // Known tradeable assets — required for Yes/No markets to qualify as price markets.
+// Intentionally excludes common words shared with non-crypto entities (e.g. "avalanche"
+// matches the Colorado Avalanche NHL team). Use ticker symbols where ambiguous.
 const PRICE_ASSET_RE =
-  /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB|bitcoin|ethereum|solana|dogecoin|cardano|polygon|avalanche|chainlink|polkadot|uniswap|ripple|litecoin|binance|S&P|SPX|nasdaq|gold|oil|EUR|GBP|JPY|crude)\b/i;
+  /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB|bitcoin|ethereum|solana|dogecoin|cardano|polygon|chainlink|polkadot|uniswap|ripple|litecoin|binance|S&P|SPX|nasdaq|gold|oil|EUR|GBP|JPY|crude)\b/i;
+
+// For Yes/No markets the question must also contain directional/price language.
+const DIRECTIONAL_QUESTION_RE =
+  /\b(up or down|higher or lower|be (up|down|higher|lower)|go (up|down)|close (above|below|higher|lower)|price.{0,20}(above|below|higher|lower)|above \$|below \$|will .{0,30}(rise|fall|increase|decrease|up\?|down\?))\b/i;
 
 // The Gamma API list endpoint returns outcomes/prices/tokenIds as JSON strings,
 // NOT a tokens array. Parse them defensively to handle both string and array forms.
@@ -40,10 +46,14 @@ function isUpDownMarket(market: GammaMarket): boolean {
   const hasDown = outcomes.some((o) => DOWN_PATTERNS.test(o));
   if (hasUp && hasDown) return true;
 
-  // Accept Yes/No only when the question is clearly about a known asset's price.
+  // Accept Yes/No only when the question mentions a known asset AND uses
+  // directional/price language — prevents corporate-action or sports markets
+  // that happen to mention a crypto-related word from slipping through.
   const hasYes = outcomes.some((o) => /^yes$/i.test(o));
   const hasNo = outcomes.some((o) => /^no$/i.test(o));
-  if (hasYes && hasNo) return PRICE_ASSET_RE.test(market.question);
+  if (hasYes && hasNo) {
+    return PRICE_ASSET_RE.test(market.question) && DIRECTIONAL_QUESTION_RE.test(market.question);
+  }
 
   return false;
 }
