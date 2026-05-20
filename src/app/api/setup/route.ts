@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // One-time DB setup endpoint. Protected by SETUP_SECRET env var.
 // Delete this file after running once.
