@@ -39,13 +39,23 @@ async function probe(url: string) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const tag = searchParams.get("tag") ?? "crypto";
+  const q = searchParams.get("q");
+
+  if (q) {
+    // Text search probe mode: /api/debug?q=up+or+down
+    const result = await probe(
+      `${GAMMA_BASE}/markets?active=true&closed=false&limit=20&order=volume24hr&ascending=false&q=${encodeURIComponent(q)}`
+    );
+    return NextResponse.json({ q, result });
+  }
 
   const updownTag = tag === "crypto" ? "btc-updown" : `${tag}-updown`;
-  const [marketsResult, eventsResult, updownResult] = await Promise.all([
+  const [marketsResult, eventsResult, updownResult, textSearchResult] = await Promise.all([
     probe(`${GAMMA_BASE}/markets?active=true&closed=false&limit=20&tag_slug=${tag}`),
     probe(`${GAMMA_BASE}/events?active=true&closed=false&limit=10&tag_slug=${tag}`),
     probe(`${GAMMA_BASE}/markets?active=true&closed=false&limit=20&tag_slug=${updownTag}`),
+    probe(`${GAMMA_BASE}/markets?active=true&closed=false&limit=20&order=volume24hr&ascending=false&q=${encodeURIComponent("up or down")}`),
   ]);
 
-  return NextResponse.json({ tag, marketsResult, eventsResult, updownResult });
+  return NextResponse.json({ tag, marketsResult, eventsResult, updownResult, textSearchResult });
 }

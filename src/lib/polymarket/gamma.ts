@@ -178,23 +178,65 @@ async function fetchGammaEvents(tagSlug: string): Promise<GammaMarket[]> {
   }
 }
 
-// Polymarket "up or down" price markets use the pattern <asset>-updown.
-// The generic "crypto" tag returns broad crypto-culture content, not price markets.
-const CATEGORY_TAGS: Record<"crypto" | "finance", string[]> = {
-  crypto: ["btc-updown", "eth-updown", "sol-updown", "doge-updown", "bnb-updown", "xrp-updown", "crypto"],
-  finance: ["gold-updown", "spx-updown", "oil-updown", "financials", "economics"],
-};
+// Infer category from question text — crypto tickers/names → "crypto", else "finance".
+const CRYPTO_ASSET_RE =
+  /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB|bitcoin|ethereum|solana|dogecoin|cardano|polygon|chainlink|polkadot|uniswap|ripple|litecoin)\b/i;
+
+function inferCategory(question: string): MarketCategory {
+  return CRYPTO_ASSET_RE.test(question) ? "crypto" : "finance";
+}
+
+// Text queries that reliably surface price-direction markets.
+// Polymarket question phrasing is consistent: "Will X be up or down by …?"
+const TEXT_SEARCHES = ["up or down", "higher or lower", "above or below"];
+
+async function fetchGammaBySearch(q: string): Promise<GammaMarket[]> {
+  const url = new URL(`${GAMMA_BASE}/markets`);
+  url.searchParams.set("q", q);
+  url.searchParams.set("active", "true");
+  url.searchParams.set("closed", "false");
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("order", "volume24hr");
+  url.searchParams.set("ascending", "false");
+
+  try {
+    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, cache: "no-store" });
+    if (!res.ok) {
+      console.error(`Gamma search error: ${res.status} — ${url}`);
+      return [];
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.markets ?? []);
+  } catch (err) {
+    console.error(`Gamma search failed: ${err}`);
+    return [];
+  }
+}
 
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  const tagSets: Array<{ tags: string[]; cat: MarketCategory }> = category
-    ? [{ tags: CATEGORY_TAGS[category], cat: category }]
-    : [
-        { tags: CATEGORY_TAGS.crypto, cat: "crypto" },
-        { tags: CATEGORY_TAGS.finance, cat: "finance" },
-      ];
+  // Primary: text-based searches that find actual price-direction markets regardless of tags.
+  const searchTasks = TEXT_SEARCHES.map((q) =>
+    fetchGammaBySearch(q).then((markets) =>
+      markets
+        .map((m) => normalizeMarket(m, inferCategory(m.question)))
+        .filter((m): m is UpDownMarket => m !== null)
+        .filter((m) => !category || m.category === category)
+    )
+  );
 
-  const fetchTasks = tagSets.flatMap(({ tags, cat }) =>
-    tags.flatMap((slug) => [
+  // Secondary: tag-based fallback for any markets the text search misses.
+  const TAG_SLUGS: Array<{ slug: string; cat: MarketCategory }> = [
+    { slug: "btc-updown", cat: "crypto" },
+    { slug: "eth-updown", cat: "crypto" },
+    { slug: "sol-updown", cat: "crypto" },
+    { slug: "crypto", cat: "crypto" },
+    { slug: "gold-updown", cat: "finance" },
+    { slug: "spx-updown", cat: "finance" },
+    { slug: "oil-updown", cat: "finance" },
+  ];
+
+  const tagTasks = TAG_SLUGS.filter(({ cat }) => !category || cat === category).flatMap(
+    ({ slug, cat }) => [
       fetchGammaPage({ tag_slug: slug, active: "true", closed: "false", limit: "100" }).then(
         (markets) =>
           markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
@@ -202,10 +244,10 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
       fetchGammaEvents(slug).then((markets) =>
         markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
       ),
-    ])
+    ]
   );
 
-  const results = await Promise.allSettled(fetchTasks);
+  const results = await Promise.allSettled([...searchTasks, ...tagTasks]);
 
   const all: UpDownMarket[] = [];
   for (const r of results) {
