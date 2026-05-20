@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 export default async function LogsPage() {
   const [signals, apiErrors] = await Promise.all([
     db.signalLog.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),

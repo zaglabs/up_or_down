@@ -1,6 +1,8 @@
 import { db } from "@/lib/db";
 import { WatchlistRow } from "./WatchlistRow";
 
+export const dynamic = "force-dynamic";
+
 export default async function WatchlistPage() {
   const overrides = await db.marketOverride.findMany({ orderBy: [{ pinned: "desc" }, { updatedAt: "desc" }] });
 

@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminOverview() {
   const [users, signals, trades, apiLogs] = await Promise.all([
     db.user.count(),
