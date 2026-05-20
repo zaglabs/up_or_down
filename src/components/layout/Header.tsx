@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, Settings, TrendingUp, ShieldCheck, LogOut } from "lucide-react";
+import { BarChart2, TrendingUp, ShieldCheck, LogOut } from "lucide-react";
 import { ModeToggle } from "./ModeToggle";
 import { usePaperStore } from "@/store/paper-store";
 import { useAppStore } from "@/store/app-store";
@@ -21,7 +21,6 @@ export function Header() {
   const navLinks = [
     { href: "/dashboard", label: "Markets", icon: TrendingUp },
     { href: "/portfolio", label: "Portfolio", icon: BarChart2 },
-    { href: "/settings", label: "Settings", icon: Settings },
   ];
 
   return (

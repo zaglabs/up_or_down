@@ -2,11 +2,13 @@ import Link from "next/link";
 import { auth } from "@/lib/auth/config";
 import { redirect } from "next/navigation";
 import { signOut } from "@/lib/auth/config";
-import { LayoutDashboard, Users, Activity, BookOpen, LogOut } from "lucide-react";
+import { LayoutDashboard, Users, Activity, BookOpen, KeyRound, Bot, LogOut } from "lucide-react";
 
 const NAV = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/users", label: "Users", icon: Users },
+  { href: "/admin/secrets", label: "Secrets", icon: KeyRound },
+  { href: "/admin/auto-trade", label: "Auto-Trade", icon: Bot },
   { href: "/admin/logs", label: "Logs", icon: Activity },
   { href: "/admin/watchlist", label: "Watchlist", icon: BookOpen },
 ];
