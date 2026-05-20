@@ -145,8 +145,7 @@ async function fetchGammaPage(params: Record<string, string>): Promise<GammaMark
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, next: { revalidate: 60 } } as any);
+    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, cache: "no-store" });
     if (!res.ok) {
       console.error(`Gamma API error: ${res.status} — ${url}`);
       return [];
@@ -167,8 +166,7 @@ async function fetchGammaEvents(tagSlug: string): Promise<GammaMarket[]> {
   url.searchParams.set("limit", "50");
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, next: { revalidate: 60 } } as any);
+    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, cache: "no-store" });
     if (!res.ok) return [];
     const data = await res.json();
     const events: Array<{ markets?: GammaMarket[] }> = Array.isArray(data)
