@@ -2,26 +2,29 @@ import type { GammaMarket, UpDownMarket, MarketCategory, MarketPeriod } from "./
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
-const UP_PATTERNS = /^(up|higher|above|yes)$/i;
-const DOWN_PATTERNS = /^(down|lower|below|no)$/i;
+// Strict patterns: only directional outcomes, not generic yes/no
+const UP_PATTERNS = /^(up|higher|above|over|bullish)$/i;
+const DOWN_PATTERNS = /^(down|lower|below|under|bearish)$/i;
 
 function isUpDownMarket(market: GammaMarket): boolean {
   if (!market.tokens || market.tokens.length !== 2) return false;
   const outcomes = market.tokens.map((t) => t.outcome.trim());
-  return outcomes.some((o) => UP_PATTERNS.test(o)) && outcomes.some((o) => DOWN_PATTERNS.test(o));
+  return (
+    outcomes.some((o) => UP_PATTERNS.test(o)) &&
+    outcomes.some((o) => DOWN_PATTERNS.test(o))
+  );
 }
 
 function parseAsset(question: string): string {
   const patterns = [
-    /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX)\b/i,
-    /\b(bitcoin|ethereum|solana|dogecoin|cardano|polygon|avalanche|chainlink|polkadot|uniswap|ripple|litecoin)\b/i,
-    /\b(S&P|SPX|nasdaq|nasdaq 100|gold|oil|EUR|GBP|JPY|crude)\b/i,
+    /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB|PEPE|SHIB|ARB|OP|SUI|APT|INJ|WIF|BONK)\b/i,
+    /\b(bitcoin|ethereum|solana|dogecoin|cardano|polygon|avalanche|chainlink|polkadot|uniswap|ripple|litecoin|binance)\b/i,
+    /\b(S&P|SPX|SPY|nasdaq|NDX|gold|oil|EUR|GBP|JPY|crude|silver|qqq|dow)\b/i,
   ];
   for (const p of patterns) {
     const m = question.match(p);
     if (m) return m[1].toUpperCase();
   }
-  // Extract first capitalized word as asset
   const firstCap = question.match(/\b([A-Z]{2,6})\b/);
   return firstCap ? firstCap[1] : "ASSET";
 }
@@ -82,39 +85,72 @@ function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownM
   };
 }
 
-async function fetchGammaMarkets(tagSlug: string): Promise<GammaMarket[]> {
+interface FetchOptions {
+  tagSlug?: string;
+  query?: string;
+  limit?: number;
+}
+
+async function fetchGammaMarkets(opts: FetchOptions): Promise<GammaMarket[]> {
   const url = new URL(`${GAMMA_BASE}/markets`);
-  url.searchParams.set("tag_slug", tagSlug);
+  if (opts.tagSlug) url.searchParams.set("tag_slug", opts.tagSlug);
+  if (opts.query) url.searchParams.set("q", opts.query);
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
-  url.searchParams.set("limit", "100");
+  url.searchParams.set("limit", String(opts.limit ?? 100));
 
-  const res = await fetch(url.toString(), {
-    headers: { "Accept": "application/json" },
-    next: { revalidate: 60 },
-  });
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { Accept: "application/json" },
+      next: { revalidate: 60 },
+    });
 
-  if (!res.ok) {
-    console.error(`Gamma API error: ${res.status} for tag ${tagSlug}`);
+    if (!res.ok) {
+      console.error(`Gamma API error: ${res.status} for ${url.toString()}`);
+      return [];
+    }
+
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.markets ?? []);
+  } catch (err) {
+    console.error(`Gamma API fetch failed: ${err}`);
     return [];
   }
-
-  const data = await res.json();
-  return Array.isArray(data) ? data : (data.markets ?? []);
 }
 
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  const categories: Array<{ slug: string; cat: MarketCategory }> = category
-    ? [{ slug: category === "crypto" ? "crypto" : "financials", cat: category }]
+  // Build search strategies: tag-based + text search for "up or down" markets
+  type Strategy = { opts: FetchOptions; cat: MarketCategory };
+
+  const strategies: Strategy[] = category
+    ? category === "crypto"
+      ? [
+          { opts: { tagSlug: "crypto" }, cat: "crypto" },
+          { opts: { tagSlug: "up-or-down" }, cat: "crypto" },
+          { opts: { query: "up or down crypto" }, cat: "crypto" },
+          { opts: { query: "higher or lower crypto" }, cat: "crypto" },
+        ]
+      : [
+          { opts: { tagSlug: "financials" }, cat: "finance" },
+          { opts: { tagSlug: "economics" }, cat: "finance" },
+          { opts: { query: "up or down" }, cat: "finance" },
+        ]
     : [
-        { slug: "crypto", cat: "crypto" },
-        { slug: "financials", cat: "finance" },
-        { slug: "economics", cat: "finance" },
+        // Crypto: tag-based + text search
+        { opts: { tagSlug: "crypto" }, cat: "crypto" },
+        { opts: { tagSlug: "up-or-down" }, cat: "crypto" },
+        { opts: { query: "will bitcoin go higher or lower" }, cat: "crypto" },
+        { opts: { query: "will eth go higher or lower" }, cat: "crypto" },
+        { opts: { query: "up or down crypto" }, cat: "crypto" },
+        // Finance: tag-based + text search
+        { opts: { tagSlug: "financials" }, cat: "finance" },
+        { opts: { tagSlug: "economics" }, cat: "finance" },
+        { opts: { query: "up or down finance" }, cat: "finance" },
       ];
 
   const results = await Promise.allSettled(
-    categories.map(({ slug, cat }) =>
-      fetchGammaMarkets(slug).then((markets) =>
+    strategies.map(({ opts, cat }) =>
+      fetchGammaMarkets(opts).then((markets) =>
         markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
       )
     )
@@ -125,13 +161,17 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
     if (r.status === "fulfilled") all.push(...r.value);
   }
 
-  // Deduplicate by conditionId
-  const seen = new Set<string>();
-  return all.filter((m) => {
-    if (seen.has(m.conditionId)) return false;
-    seen.add(m.conditionId);
-    return true;
-  });
+  // Deduplicate by conditionId, prefer higher liquidity entries
+  const byId = new Map<string, UpDownMarket>();
+  for (const m of all) {
+    const existing = byId.get(m.conditionId);
+    if (!existing || m.liquidity > existing.liquidity) {
+      byId.set(m.conditionId, m);
+    }
+  }
+
+  // Sort by liquidity descending so most active markets appear first
+  return Array.from(byId.values()).sort((a, b) => b.liquidity - a.liquidity);
 }
 
 export async function fetchMarketByConditionId(conditionId: string): Promise<GammaMarket | null> {
