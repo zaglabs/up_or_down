@@ -12,18 +12,20 @@ export default function SetupPage() {
     setStatus("loading");
     try {
       const res = await fetch("/api/setup");
-      const data = await res.json();
-      if (!res.ok) {
+      const text = await res.text();
+      let data: { ok?: boolean; message?: string; error?: string } = {};
+      try { data = JSON.parse(text); } catch { data = { error: text.slice(0, 200) }; }
+      if (!res.ok || !data.ok) {
         setStatus("error");
-        setMessage(data.error ?? data.detail ?? "Setup failed");
+        setMessage(data.error ?? "Setup failed");
       } else {
         setStatus("done");
-        setMessage(data.message);
+        setMessage(data.message ?? "Done!");
         setTimeout(() => router.push("/login"), 2000);
       }
-    } catch {
+    } catch (err) {
       setStatus("error");
-      setMessage("Network error — please try again");
+      setMessage(err instanceof Error ? err.message : "Network error");
     }
   };
 
