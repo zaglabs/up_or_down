@@ -6,7 +6,14 @@ import { MarketCard } from "./MarketCard";
 import type { UpDownMarket, MarketCategory, MarketPeriod } from "@/lib/polymarket/types";
 import { RefreshCw } from "lucide-react";
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = (url: string) =>
+  fetch(url).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json().then((d) => {
+      if (!Array.isArray(d)) throw new Error("Unexpected response shape");
+      return d;
+    });
+  });
 
 const PERIODS: Array<MarketPeriod | "all"> = ["all", "5m", "15m", "1h", "6h", "1d", "1w"];
 const CATEGORIES: Array<MarketCategory | "all"> = ["all", "crypto", "finance"];

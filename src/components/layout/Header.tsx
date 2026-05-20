@@ -2,22 +2,25 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, Settings, TrendingUp } from "lucide-react";
+import { BarChart2, TrendingUp, ShieldCheck, LogOut } from "lucide-react";
 import { ModeToggle } from "./ModeToggle";
 import { usePaperStore } from "@/store/paper-store";
 import { useAppStore } from "@/store/app-store";
 import { formatCurrency } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { useSession, signOut } from "next-auth/react";
 
 export function Header() {
   const pathname = usePathname();
   const { portfolio } = usePaperStore();
   const { mode } = useAppStore();
+  const { data: session } = useSession();
+
+  const isAdmin = (session?.user as { role?: string } | undefined)?.role === "ADMIN";
 
   const navLinks = [
     { href: "/dashboard", label: "Markets", icon: TrendingUp },
     { href: "/portfolio", label: "Portfolio", icon: BarChart2 },
-    { href: "/settings", label: "Settings", icon: Settings },
   ];
 
   return (
@@ -35,7 +38,7 @@ export function Header() {
                 href={href}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
-                  pathname === href
+                  pathname.startsWith(href)
                     ? "bg-zinc-800 text-zinc-100"
                     : "text-zinc-400 hover:text-zinc-200"
                 )}
@@ -44,6 +47,20 @@ export function Header() {
                 {label}
               </Link>
             ))}
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
+                  pathname.startsWith("/admin")
+                    ? "bg-zinc-800 text-zinc-100"
+                    : "text-zinc-400 hover:text-zinc-200"
+                )}
+              >
+                <ShieldCheck size={14} />
+                Admin
+              </Link>
+            )}
           </nav>
         </div>
 
@@ -57,6 +74,13 @@ export function Header() {
             </div>
           )}
           <ModeToggle />
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+            title="Sign out"
+          >
+            <LogOut size={14} />
+          </button>
         </div>
       </div>
     </header>

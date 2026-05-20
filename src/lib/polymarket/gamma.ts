@@ -2,18 +2,65 @@ import type { GammaMarket, UpDownMarket, MarketCategory, MarketPeriod } from "./
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
-const UP_PATTERNS = /^(up|higher|above|yes)$/i;
-const DOWN_PATTERNS = /^(down|lower|below|no)$/i;
+// Strict directional outcomes — exclude yes/no to avoid false positives on
+// entertainment markets. Yes/No only accepted when question mentions a price asset.
+const UP_PATTERNS = /^(up|higher|above)$/i;
+const DOWN_PATTERNS = /^(down|lower|below)$/i;
+
+const BROWSER_HEADERS = {
+  Accept: "application/json",
+  "Accept-Language": "en-US,en;q=0.9",
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+};
+
+// Known tradeable assets — required for Yes/No markets to qualify as price markets.
+// Intentionally excludes common words shared with non-crypto entities (e.g. "avalanche"
+// matches the Colorado Avalanche NHL team). Use ticker symbols where ambiguous.
+const PRICE_ASSET_RE =
+  /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB|bitcoin|ethereum|solana|dogecoin|cardano|polygon|chainlink|polkadot|uniswap|ripple|litecoin|binance|S&P|SPX|nasdaq|gold|oil|EUR|GBP|JPY|crude)\b/i;
+
+// For Yes/No markets the question must also contain directional/price language.
+const DIRECTIONAL_QUESTION_RE =
+  /\b(up or down|higher or lower|be (up|down|higher|lower)|go (up|down)|close (above|below|higher|lower)|price.{0,20}(above|below|higher|lower)|above \$|below \$|will .{0,30}(rise|fall|increase|decrease|up\?|down\?))\b/i;
+
+// The Gamma API list endpoint returns outcomes/prices/tokenIds as JSON strings,
+// NOT a tokens array. Parse them defensively to handle both string and array forms.
+function parseJsonStringField(raw: string | string[] | undefined): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map((s) => String(s).replace(/^"|"$/g, "").trim());
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map((s) => String(s).replace(/^"|"$/g, "").trim());
+  } catch {}
+  return [];
+}
 
 function isUpDownMarket(market: GammaMarket): boolean {
-  if (!market.tokens || market.tokens.length !== 2) return false;
-  const outcomes = market.tokens.map((t) => t.outcome.trim());
-  return outcomes.some((o) => UP_PATTERNS.test(o)) && outcomes.some((o) => DOWN_PATTERNS.test(o));
+  // Prefer outcomes field (present in list responses) over tokens array (individual fetch only).
+  const outcomeSource = market.outcomes ?? (market.tokens ? JSON.stringify(market.tokens.map((t) => t.outcome)) : undefined);
+  const outcomes = parseJsonStringField(outcomeSource);
+  if (outcomes.length !== 2) return false;
+
+  const hasUp = outcomes.some((o) => UP_PATTERNS.test(o));
+  const hasDown = outcomes.some((o) => DOWN_PATTERNS.test(o));
+  if (hasUp && hasDown) return true;
+
+  // Accept Yes/No only when the question mentions a known asset AND uses
+  // directional/price language — prevents corporate-action or sports markets
+  // that happen to mention a crypto-related word from slipping through.
+  const hasYes = outcomes.some((o) => /^yes$/i.test(o));
+  const hasNo = outcomes.some((o) => /^no$/i.test(o));
+  if (hasYes && hasNo) {
+    return PRICE_ASSET_RE.test(market.question) && DIRECTIONAL_QUESTION_RE.test(market.question);
+  }
+
+  return false;
 }
 
 function parseAsset(question: string): string {
   const patterns = [
-    /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX)\b/i,
+    /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB)\b/i,
     /\b(bitcoin|ethereum|solana|dogecoin|cardano|polygon|avalanche|chainlink|polkadot|uniswap|ripple|litecoin)\b/i,
     /\b(S&P|SPX|nasdaq|nasdaq 100|gold|oil|EUR|GBP|JPY|crude)\b/i,
   ];
@@ -21,7 +68,6 @@ function parseAsset(question: string): string {
     const m = question.match(p);
     if (m) return m[1].toUpperCase();
   }
-  // Extract first capitalized word as asset
   const firstCap = question.match(/\b([A-Z]{2,6})\b/);
   return firstCap ? firstCap[1] : "ASSET";
 }
@@ -35,7 +81,6 @@ function parsePeriod(question: string, endDate: string, startDate: string): Mark
   if (q.includes("daily") || q.includes("1 day") || q.includes("today") || q.includes("24h")) return "1d";
   if (q.includes("weekly") || q.includes("1 week") || q.includes("7 day")) return "1w";
 
-  // Estimate from date range
   try {
     const start = new Date(startDate).getTime();
     const end = new Date(endDate).getTime();
@@ -52,17 +97,30 @@ function parsePeriod(question: string, endDate: string, startDate: string): Mark
 function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownMarket | null {
   if (!isUpDownMarket(market)) return null;
 
-  const upToken = market.tokens.find((t) => UP_PATTERNS.test(t.outcome.trim()));
-  const downToken = market.tokens.find((t) => DOWN_PATTERNS.test(t.outcome.trim()));
-  if (!upToken || !downToken) return null;
+  const outcomeSource = market.outcomes ?? (market.tokens ? JSON.stringify(market.tokens.map((t) => t.outcome)) : undefined);
+  const outcomes = parseJsonStringField(outcomeSource);
+  const prices = parseJsonStringField(market.outcomePrices);
+  const tokenIds = parseJsonStringField(market.clobTokenIds);
 
-  let outcomePrices: string[] = [];
-  try {
-    outcomePrices = JSON.parse(market.outcomePrices || "[]");
-  } catch {}
+  // Fall back to tokens array for tokenIds when fetching individual markets.
+  const resolvedTokenIds =
+    tokenIds.length === 2
+      ? tokenIds
+      : market.tokens?.map((t) => t.tokenId) ?? [];
 
-  const upPrice = upToken.price ?? parseFloat(outcomePrices[0] ?? "0.5");
-  const downPrice = downToken.price ?? parseFloat(outcomePrices[1] ?? "0.5");
+  const upIdx = outcomes.findIndex((o) => UP_PATTERNS.test(o) || /^yes$/i.test(o));
+  const downIdx = outcomes.findIndex((o) => DOWN_PATTERNS.test(o) || /^no$/i.test(o));
+  if (upIdx === -1 || downIdx === -1) return null;
+
+  const upTokenId = resolvedTokenIds[upIdx];
+  const downTokenId = resolvedTokenIds[downIdx];
+  if (!upTokenId || !downTokenId) return null;
+
+  // Try token price first (individual fetch), then outcomePrices array.
+  const upTokenPrice = market.tokens?.[upIdx]?.price;
+  const downTokenPrice = market.tokens?.[downIdx]?.price;
+  const upPrice = upTokenPrice ?? parseFloat(prices[upIdx] ?? "0.5");
+  const downPrice = downTokenPrice ?? parseFloat(prices[downIdx] ?? "0.5");
 
   return {
     conditionId: market.conditionId,
@@ -70,8 +128,8 @@ function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownM
     asset: parseAsset(market.question),
     period: parsePeriod(market.question, market.endDateIso || market.endDate, market.startDate),
     endDateIso: market.endDateIso || market.endDate,
-    upTokenId: upToken.tokenId,
-    downTokenId: downToken.tokenId,
+    upTokenId,
+    downTokenId,
     upPrice: isNaN(upPrice) ? 0.5 : upPrice,
     downPrice: isNaN(downPrice) ? 0.5 : downPrice,
     volume24h: parseFloat(market.volume || "0"),
@@ -82,43 +140,114 @@ function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownM
   };
 }
 
-async function fetchGammaMarkets(tagSlug: string): Promise<GammaMarket[]> {
+async function fetchGammaPage(params: Record<string, string>): Promise<GammaMarket[]> {
   const url = new URL(`${GAMMA_BASE}/markets`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+  try {
+    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, cache: "no-store" });
+    if (!res.ok) {
+      console.error(`Gamma API error: ${res.status} — ${url}`);
+      return [];
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.markets ?? []);
+  } catch (err) {
+    console.error(`Gamma fetch failed: ${err}`);
+    return [];
+  }
+}
+
+async function fetchGammaEvents(tagSlug: string): Promise<GammaMarket[]> {
+  const url = new URL(`${GAMMA_BASE}/events`);
   url.searchParams.set("tag_slug", tagSlug);
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
-  url.searchParams.set("limit", "100");
+  url.searchParams.set("limit", "50");
 
-  const res = await fetch(url.toString(), {
-    headers: { "Accept": "application/json" },
-    next: { revalidate: 60 },
-  });
-
-  if (!res.ok) {
-    console.error(`Gamma API error: ${res.status} for tag ${tagSlug}`);
+  try {
+    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const events: Array<{ markets?: GammaMarket[] }> = Array.isArray(data)
+      ? data
+      : (data.events ?? []);
+    return events.flatMap((e) => e.markets ?? []);
+  } catch {
     return [];
   }
+}
 
-  const data = await res.json();
-  return Array.isArray(data) ? data : (data.markets ?? []);
+// Infer category from question text — crypto tickers/names → "crypto", else "finance".
+const CRYPTO_ASSET_RE =
+  /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|ALGO|XLM|VET|TRX|BNB|bitcoin|ethereum|solana|dogecoin|cardano|polygon|chainlink|polkadot|uniswap|ripple|litecoin)\b/i;
+
+function inferCategory(question: string): MarketCategory {
+  return CRYPTO_ASSET_RE.test(question) ? "crypto" : "finance";
+}
+
+// Text queries that reliably surface price-direction markets.
+// Polymarket question phrasing is consistent: "Will X be up or down by …?"
+const TEXT_SEARCHES = ["up or down", "higher or lower", "above or below"];
+
+async function fetchGammaBySearch(q: string): Promise<GammaMarket[]> {
+  const url = new URL(`${GAMMA_BASE}/markets`);
+  url.searchParams.set("q", q);
+  url.searchParams.set("active", "true");
+  url.searchParams.set("closed", "false");
+  url.searchParams.set("limit", "100");
+  url.searchParams.set("order", "volume24hr");
+  url.searchParams.set("ascending", "false");
+
+  try {
+    const res = await fetch(url.toString(), { headers: BROWSER_HEADERS, cache: "no-store" });
+    if (!res.ok) {
+      console.error(`Gamma search error: ${res.status} — ${url}`);
+      return [];
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.markets ?? []);
+  } catch (err) {
+    console.error(`Gamma search failed: ${err}`);
+    return [];
+  }
 }
 
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  const categories: Array<{ slug: string; cat: MarketCategory }> = category
-    ? [{ slug: category === "crypto" ? "crypto" : "financials", cat: category }]
-    : [
-        { slug: "crypto", cat: "crypto" },
-        { slug: "financials", cat: "finance" },
-        { slug: "economics", cat: "finance" },
-      ];
-
-  const results = await Promise.allSettled(
-    categories.map(({ slug, cat }) =>
-      fetchGammaMarkets(slug).then((markets) =>
-        markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
-      )
+  // Primary: text-based searches that find actual price-direction markets regardless of tags.
+  const searchTasks = TEXT_SEARCHES.map((q) =>
+    fetchGammaBySearch(q).then((markets) =>
+      markets
+        .map((m) => normalizeMarket(m, inferCategory(m.question)))
+        .filter((m): m is UpDownMarket => m !== null)
+        .filter((m) => !category || m.category === category)
     )
   );
+
+  // Secondary: tag-based fallback for any markets the text search misses.
+  const TAG_SLUGS: Array<{ slug: string; cat: MarketCategory }> = [
+    { slug: "btc-updown", cat: "crypto" },
+    { slug: "eth-updown", cat: "crypto" },
+    { slug: "sol-updown", cat: "crypto" },
+    { slug: "crypto", cat: "crypto" },
+    { slug: "gold-updown", cat: "finance" },
+    { slug: "spx-updown", cat: "finance" },
+    { slug: "oil-updown", cat: "finance" },
+  ];
+
+  const tagTasks = TAG_SLUGS.filter(({ cat }) => !category || cat === category).flatMap(
+    ({ slug, cat }) => [
+      fetchGammaPage({ tag_slug: slug, active: "true", closed: "false", limit: "100" }).then(
+        (markets) =>
+          markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
+      ),
+      fetchGammaEvents(slug).then((markets) =>
+        markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
+      ),
+    ]
+  );
+
+  const results = await Promise.allSettled([...searchTasks, ...tagTasks]);
 
   const all: UpDownMarket[] = [];
   for (const r of results) {
