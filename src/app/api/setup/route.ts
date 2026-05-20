@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
+import bcrypt from "bcryptjs";
+import { randomUUID } from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -112,5 +114,25 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ success: true, results });
+  // Seed admin user if email+password provided in body
+  let adminResult: { seeded: boolean; email?: string; error?: string } = { seeded: false };
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { adminEmail, adminPassword } = body as { adminEmail?: string; adminPassword?: string };
+    if (adminEmail && adminPassword) {
+      const hash = await bcrypt.hash(adminPassword, 12);
+      const now = new Date().toISOString();
+      await sql.query(
+        `INSERT INTO "User" ("id","email","passwordHash","role","createdAt","updatedAt")
+         VALUES ($1,$2,$3,'ADMIN',$4,$5)
+         ON CONFLICT ("email") DO UPDATE SET "passwordHash"=$3, "role"='ADMIN', "updatedAt"=$5`,
+        [randomUUID(), adminEmail, hash, now, now]
+      );
+      adminResult = { seeded: true, email: adminEmail };
+    }
+  } catch (err) {
+    adminResult = { seeded: false, error: (err as Error).message };
+  }
+
+  return NextResponse.json({ success: true, results, admin: adminResult });
 }
