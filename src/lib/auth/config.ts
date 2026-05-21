@@ -27,4 +27,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       },
     }),
   ],
+  callbacks: {
+    ...edgeAuthConfig.callbacks,
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        token.role = (user as unknown as { role: string }).role;
+      } else if (token.id) {
+        // Re-fetch role on every token refresh so admin promotions take effect
+        // without requiring the user to sign out.
+        const dbUser = await db.user.findUnique({
+          where: { id: token.id as string },
+          select: { role: true },
+        });
+        if (dbUser) token.role = dbUser.role;
+      }
+      return token;
+    },
+  },
 });
+
