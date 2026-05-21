@@ -125,17 +125,29 @@ export function MarketList() {
 
       {/* Empty state */}
       {!isLoading && !error && markets !== undefined && filtered.length === 0 && (
-        <div className="rounded-xl border border-zinc-800 p-8 text-center space-y-2">
+        <div className="rounded-xl border border-zinc-800 p-8 text-center space-y-3">
           <p className="text-zinc-400 font-medium">No directional markets found</p>
-          <p className="text-zinc-600 text-xs max-w-sm mx-auto">
-            Polymarket returned {markets.length} market{markets.length !== 1 ? "s" : ""} total,
-            but none matched the price-direction filter
-            {period !== "all" ? ` for the "${period}" period` : ""}.
-            Check the server terminal for [gamma] log lines.
-          </p>
+          {markets.length === 0 ? (
+            <p className="text-zinc-600 text-xs max-w-sm mx-auto">
+              The Polymarket API returned 0 markets. This usually means the API is
+              unreachable from your server. Check the server terminal for{" "}
+              <code className="text-zinc-500">[gamma]</code> log lines to see the exact
+              error, then visit{" "}
+              <a href="/api/debug" target="_blank" className="text-zinc-400 underline">
+                /api/debug
+              </a>{" "}
+              for a connectivity report.
+            </p>
+          ) : (
+            <p className="text-zinc-600 text-xs max-w-sm mx-auto">
+              {markets.length} market{markets.length !== 1 ? "s" : ""} fetched from
+              Polymarket but none matched the price-direction filter
+              {period !== "all" ? ` for the "${period}" period` : ""}.
+            </p>
+          )}
           <button
             onClick={() => mutate()}
-            className="mt-2 text-xs text-zinc-500 underline hover:text-zinc-300"
+            className="text-xs text-zinc-500 underline hover:text-zinc-300"
           >
             Try again
           </button>
