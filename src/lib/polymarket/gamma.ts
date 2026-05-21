@@ -15,9 +15,28 @@ const FINANCIAL_ASSET =
 
 type MarketKind = "directional-token" | "directional-yes-no" | null;
 
+function buildTokens(market: GammaMarket): GammaMarket["tokens"] {
+  if (Array.isArray(market.tokens) && market.tokens.length === 2) return market.tokens;
+  // Gamma list API stores outcome names in a JSON string field `outcomes`
+  let outcomeNames: string[] = [];
+  try { outcomeNames = JSON.parse((market as any).outcomes ?? "[]"); } catch {}
+  if (outcomeNames.length !== 2) return [];
+  let prices: string[] = [];
+  try { prices = JSON.parse(market.outcomePrices ?? "[]"); } catch {}
+  let clobIds: string[] = [];
+  try { clobIds = JSON.parse((market as any).clobTokenIds ?? "[]"); } catch {}
+  return outcomeNames.map((name, i) => ({
+    outcome: name,
+    tokenId: clobIds[i] ?? "",
+    price:   parseFloat(prices[i] ?? "0.5"),
+    winner:  false,
+  }));
+}
+
 function classifyMarket(market: GammaMarket): MarketKind {
-  if (!market.tokens || market.tokens.length !== 2) return null;
-  const outcomes = market.tokens.map((t) => t.outcome.trim());
+  const tokens = buildTokens(market);
+  if (tokens.length !== 2) return null;
+  const outcomes = tokens.map((t) => t.outcome.trim());
 
   // Tier 1 — literal Higher/Lower/Up/Down tokens
   if (outcomes.some((o) => TOKEN_UP.test(o)) && outcomes.some((o) => TOKEN_DOWN.test(o))) {
@@ -84,12 +103,14 @@ function normalizeMarket(market: GammaMarket): UpDownMarket | null {
   const kind = classifyMarket(market);
   if (!kind) return null;
 
-  let upToken   = market.tokens.find((t) => TOKEN_UP.test(t.outcome.trim()));
-  let downToken = market.tokens.find((t) => TOKEN_DOWN.test(t.outcome.trim()));
+  const tokens = buildTokens(market);
+
+  let upToken   = tokens.find((t) => TOKEN_UP.test(t.outcome.trim()));
+  let downToken = tokens.find((t) => TOKEN_DOWN.test(t.outcome.trim()));
 
   if (kind === "directional-yes-no") {
-    const yesToken = market.tokens.find((t) => t.outcome.trim().toLowerCase() === "yes");
-    const noToken  = market.tokens.find((t) => t.outcome.trim().toLowerCase() === "no");
+    const yesToken = tokens.find((t) => t.outcome.trim().toLowerCase() === "yes");
+    const noToken  = tokens.find((t) => t.outcome.trim().toLowerCase() === "no");
     if (!yesToken || !noToken) return null;
     const bearish = /\b(fall|drop|crash|below|lower|decline|lose|dump)\b/i.test(market.question);
     upToken   = bearish ? noToken  : yesToken;
@@ -101,8 +122,10 @@ function normalizeMarket(market: GammaMarket): UpDownMarket | null {
   let outcomePrices: string[] = [];
   try { outcomePrices = JSON.parse(market.outcomePrices || "[]"); } catch {}
 
-  const upPrice   = upToken.price   ?? parseFloat(outcomePrices[0] ?? "0.5");
-  const downPrice = downToken.price ?? parseFloat(outcomePrices[1] ?? "0.5");
+  const upIdx   = tokens.indexOf(upToken);
+  const downIdx = tokens.indexOf(downToken);
+  const upPrice   = upToken.price   ?? parseFloat(outcomePrices[upIdx]   ?? "0.5");
+  const downPrice = downToken.price ?? parseFloat(outcomePrices[downIdx] ?? "0.5");
 
   return {
     conditionId: market.conditionId,

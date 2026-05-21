@@ -66,8 +66,34 @@ export function normaliseMarket(m: any): UpDownMarket | null {
   const conditionId = m.conditionId ?? m.condition_id;
   if (!conditionId) return null;
 
-  const tokens: any[] = m.tokens ?? [];
-  if (!Array.isArray(tokens) || tokens.length !== 2) return null;
+  // Parse outcome prices and token IDs regardless of token source
+  let outcomePrices: string[] = [];
+  try { outcomePrices = JSON.parse(m.outcomePrices ?? m.outcome_prices ?? "[]"); } catch {}
+
+  let clobTokenIds: string[] = [];
+  try { clobTokenIds = JSON.parse(m.clobTokenIds ?? m.clob_token_ids ?? "[]"); } catch {}
+
+  // ── Build a normalised tokens array ────────────────────────────────────────
+  // The Gamma list API returns outcomes as a JSON string in `outcomes`, not
+  // as a populated `tokens` array. Reconstruct synthetic token objects so the
+  // rest of the pipeline is unchanged.
+  let tokens: any[] = Array.isArray(m.tokens) && m.tokens.length === 2 ? m.tokens : [];
+
+  if (tokens.length !== 2) {
+    // Try parsing the `outcomes` JSON string (e.g. '["Higher","Lower"]')
+    let outcomeNames: string[] = [];
+    try { outcomeNames = JSON.parse(m.outcomes ?? m.outcome_names ?? "[]"); } catch {}
+
+    if (outcomeNames.length === 2) {
+      tokens = outcomeNames.map((name: string, i: number) => ({
+        outcome:  name,
+        tokenId:  clobTokenIds[i] ?? "",
+        price:    parseFloat(outcomePrices[i] ?? "0.5"),
+      }));
+    }
+  }
+
+  if (tokens.length !== 2) return null;
 
   const getOutcome = (t: any) => String(t.outcome ?? t.outcome_name ?? "").trim();
 
@@ -98,16 +124,15 @@ export function normaliseMarket(m: any): UpDownMarket | null {
 
   if (!upToken || !downToken) return null;
 
-  let outcomePrices: string[] = [];
-  try { outcomePrices = JSON.parse(m.outcomePrices ?? m.outcome_prices ?? "[]"); } catch {}
-
   const getPrice = (t: any) => {
     const v = t.price ?? t.token_price;
     return typeof v === "string" ? parseFloat(v) : (typeof v === "number" ? v : NaN);
   };
 
-  const upPrice   = getPrice(upToken)   || parseFloat(outcomePrices[0] ?? "0.5") || 0.5;
-  const downPrice = getPrice(downToken) || parseFloat(outcomePrices[1] ?? "0.5") || 0.5;
+  const upIdx   = tokens.indexOf(upToken);
+  const downIdx = tokens.indexOf(downToken);
+  const upPrice   = getPrice(upToken)   || parseFloat(outcomePrices[upIdx]   ?? "0.5") || 0.5;
+  const downPrice = getPrice(downToken) || parseFloat(outcomePrices[downIdx] ?? "0.5") || 0.5;
 
   const question = m.question ?? "";
   const endDate  = m.endDateIso ?? m.end_date_iso ?? m.endDate ?? m.end_date ?? "";
@@ -243,12 +268,21 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
   storeDiag("rawTotal", raw.length);
   console.log(`[polymarket] total raw: ${raw.length}`);
 
-  // Sample outcomes for diagnostics
+  // Sample outcomes for diagnostics — show both tokens and the outcomes JSON string
   const sampleOutcomes = raw
     .slice(0, 10)
     .map((m: any) => {
-      const outs = (m.tokens ?? []).map((t: any) => t.outcome ?? "?").join(" / ");
-      return `"${(m.question ?? "").slice(0, 60)}…" → [${outs}]`;
+      const tokenOuts = Array.isArray(m.tokens) && m.tokens.length
+        ? m.tokens.map((t: any) => t.outcome ?? "?").join(" / ")
+        : null;
+      let outcomeStr = tokenOuts;
+      if (!outcomeStr) {
+        try {
+          const parsed = JSON.parse(m.outcomes ?? m.outcome_names ?? "[]");
+          outcomeStr = Array.isArray(parsed) ? parsed.join(" / ") : "?";
+        } catch { outcomeStr = "?"; }
+      }
+      return `"${(m.question ?? "").slice(0, 60)}…" → [${outcomeStr ?? ""}]`;
     });
 
   // ── Filter & deduplicate ──────────────────────────────────────────────────
