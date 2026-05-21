@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, Settings, TrendingUp } from "lucide-react";
+import { BarChart2, Settings, TrendingUp, Shield } from "lucide-react";
 import { ModeToggle } from "./ModeToggle";
 import { usePaperStore } from "@/store/paper-store";
 import { useAppStore } from "@/store/app-store";
@@ -18,6 +18,7 @@ export function Header() {
     { href: "/dashboard", label: "Markets", icon: TrendingUp },
     { href: "/portfolio", label: "Portfolio", icon: BarChart2 },
     { href: "/settings", label: "Settings", icon: Settings },
+    { href: "/admin", label: "Admin", icon: Shield },
   ];
 
   return (
@@ -35,7 +36,7 @@ export function Header() {
                 href={href}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
-                  pathname === href
+                  pathname === href || (href !== "/dashboard" && pathname.startsWith(href))
                     ? "bg-zinc-800 text-zinc-100"
                     : "text-zinc-400 hover:text-zinc-200"
                 )}
