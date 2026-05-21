@@ -1,25 +1,14 @@
 import type { GammaMarket, UpDownMarket, MarketCategory, MarketPeriod } from "./types";
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
-const CLOB_BASE  = "https://clob.polymarket.com";
 
-// Mimic a real browser so WAFs don't block the request
-const BROWSER_HEADERS = {
-  Accept: "application/json, text/plain, */*",
-  "Accept-Language": "en-US,en;q=0.9",
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  Referer: "https://polymarket.com/",
-  Origin: "https://polymarket.com",
-};
-
-// ── Tier 1: literal directional token outcomes ────────────────────────────────
+// ── Outcome matchers ──────────────────────────────────────────────────────────
 const TOKEN_UP   = /^(up|higher|above)\b/i;
 const TOKEN_DOWN = /^(down|lower|below)\b/i;
 
-// ── Tier 2: Yes/No markets where the question is about price direction ─────────
+// Directional-question filter (for Yes/No markets about price direction)
 const DIRECTION_WORDS =
-  /\b(higher|lower|above|below|exceed|surpass|reach|break|rally|rise|fall|drop|crash|gain|lose|bullish|bearish|pump|dump|outperform|underperform|go up|go down|end (up|down|higher|lower|above|below)|close (above|below|higher|lower))\b/i;
+  /\b(higher|lower|above|below|exceed|surpass|reach|break|rally|rise|fall|drop|crash|gain|lose|bullish|bearish|pump|dump|outperform|underperform)\b/i;
 
 const FINANCIAL_ASSET =
   /\b(btc|bitcoin|eth|ethereum|sol|solana|doge|dogecoin|xrp|ripple|bnb|ada|cardano|avax|avalanche|matic|polygon|link|chainlink|uni|uniswap|dot|polkadot|atom|cosmos|near|ltc|litecoin|bch|shib|pepe|trx|algo|xlm|vet|ftm|crypto|s&p|spx|sp500|nasdaq|dow|djia|gold|silver|oil|crude|wti|brent|eur|gbp|jpy|forex|stock|index|equity|commodity)\b/i;
@@ -35,9 +24,13 @@ function classifyMarket(market: GammaMarket): MarketKind {
     return "directional-token";
   }
 
-  // Tier 2 — Yes/No but question is about asset price direction
+  // Tier 2 — Yes/No tokens but question is about an asset's price direction
   const norm = outcomes.map((o) => o.toLowerCase()).sort().join("|");
-  if (norm === "no|yes" && FINANCIAL_ASSET.test(market.question) && DIRECTION_WORDS.test(market.question)) {
+  if (
+    norm === "no|yes" &&
+    FINANCIAL_ASSET.test(market.question) &&
+    DIRECTION_WORDS.test(market.question)
+  ) {
     return "directional-yes-no";
   }
 
@@ -49,7 +42,7 @@ function detectCategory(market: GammaMarket): MarketCategory {
   const q    = market.question.toLowerCase();
   const cryptoTags = ["crypto","bitcoin","ethereum","solana","defi","nft","web3","altcoin"];
   if (tags.some((t) => cryptoTags.some((c) => t.includes(c)))) return "crypto";
-  const cryptoKw = ["btc","bitcoin","eth","ethereum","sol","solana","doge","xrp","bnb","ada","avax","matic","link","dot","shib","pepe","crypto","defi"];
+  const cryptoKw   = ["btc","bitcoin","eth","ethereum","sol","solana","doge","xrp","bnb","ada","avax","matic","link","shib","pepe","crypto"];
   if (cryptoKw.some((k) => q.includes(k))) return "crypto";
   return "finance";
 }
@@ -78,11 +71,11 @@ function parsePeriod(question: string, endDate: string, startDate: string): Mark
   if (q.match(/\b(weekly|this week|7[\s-]?day)/)) return "1w";
   try {
     const diff = new Date(endDate).getTime() - new Date(startDate).getTime();
-    if (diff <= 10 * 60_000)     return "5m";
-    if (diff <= 20 * 60_000)     return "15m";
-    if (diff <= 2 * 3_600_000)   return "1h";
-    if (diff <= 12 * 3_600_000)  return "6h";
-    if (diff <= 2 * 86_400_000)  return "1d";
+    if (diff <= 10 * 60_000)    return "5m";
+    if (diff <= 20 * 60_000)    return "15m";
+    if (diff <= 2 * 3_600_000)  return "1h";
+    if (diff <= 12 * 3_600_000) return "6h";
+    if (diff <= 2 * 86_400_000) return "1d";
   } catch {}
   return "1d";
 }
@@ -98,9 +91,9 @@ function normalizeMarket(market: GammaMarket): UpDownMarket | null {
     const yesToken = market.tokens.find((t) => t.outcome.trim().toLowerCase() === "yes");
     const noToken  = market.tokens.find((t) => t.outcome.trim().toLowerCase() === "no");
     if (!yesToken || !noToken) return null;
-    const isBearish = /\b(fall|drop|crash|below|lower|decline|lose|dump|go down|end (down|lower|below)|close (below|lower))\b/i.test(market.question);
-    upToken   = isBearish ? noToken  : yesToken;
-    downToken = isBearish ? yesToken : noToken;
+    const bearish = /\b(fall|drop|crash|below|lower|decline|lose|dump)\b/i.test(market.question);
+    upToken   = bearish ? noToken  : yesToken;
+    downToken = bearish ? yesToken : noToken;
   }
 
   if (!upToken || !downToken) return null;
@@ -129,154 +122,62 @@ function normalizeMarket(market: GammaMarket): UpDownMarket | null {
   };
 }
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
+// ── Fetch — same approach as original working code ────────────────────────────
 
-async function timedFetch(url: string, timeoutMs = 8_000): Promise<Response> {
-  const ctrl = new AbortController();
-  const id   = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    return await fetch(url, { headers: BROWSER_HEADERS, cache: "no-store", signal: ctrl.signal });
-  } finally {
-    clearTimeout(id);
-  }
-}
+async function fetchTagMarkets(tagSlug: string): Promise<GammaMarket[]> {
+  const url = new URL(`${GAMMA_BASE}/markets`);
+  url.searchParams.set("tag_slug", tagSlug);
+  url.searchParams.set("active", "true");
+  url.searchParams.set("closed", "false");
+  url.searchParams.set("limit", "200");
 
-async function gammaFetch(url: string): Promise<GammaMarket[]> {
   try {
-    const res = await timedFetch(url);
+    const res = await fetch(url.toString(), {
+      headers: { Accept: "application/json" },
+      next: { revalidate: 60 },
+    });
+
     if (!res.ok) {
-      const body = await res.text();
-      console.error(`[gamma] HTTP ${res.status} | ${url} | ${body.slice(0, 200)}`);
+      console.error(`[gamma] HTTP ${res.status} for tag_slug=${tagSlug}`);
       return [];
     }
+
     const data = await res.json();
-    const list: unknown = Array.isArray(data) ? data : (data?.markets ?? data?.data ?? []);
-    if (!Array.isArray(list)) {
-      console.error("[gamma] unexpected shape:", JSON.stringify(data).slice(0, 200));
-      return [];
-    }
-    return list as GammaMarket[];
-  } catch (err: any) {
-    console.error(`[gamma] fetch error | ${url} | ${err?.message ?? err}`);
+    const list = Array.isArray(data) ? data : (data.markets ?? []);
+    console.log(`[gamma] tag_slug=${tagSlug} → ${list.length} raw markets`);
+    return list;
+  } catch (err) {
+    console.error(`[gamma] fetch error for tag_slug=${tagSlug}:`, err);
     return [];
   }
 }
 
-// ── CLOB API (fallback source) ────────────────────────────────────────────────
-// Returns markets in CLOB format; we adapt them to GammaMarket.
-
-function adaptClobMarket(m: any): GammaMarket | null {
-  try {
-    return {
-      id:           m.question_id ?? m.condition_id ?? "",
-      conditionId:  m.condition_id ?? "",
-      slug:         m.market_slug ?? m.slug ?? "",
-      question:     m.question ?? "",
-      description:  m.description ?? "",
-      endDateIso:   m.end_date_iso ?? m.end_date ?? "",
-      active:       m.active ?? true,
-      closed:       m.closed ?? false,
-      tokens: (m.tokens ?? []).map((t: any) => ({
-        tokenId: t.token_id ?? t.tokenId ?? "",
-        outcome: t.outcome ?? "",
-        winner:  t.winner  ?? false,
-        price:   typeof t.price === "string" ? parseFloat(t.price) : (t.price ?? 0.5),
-      })),
-      tags:         m.tags ?? [],
-      category:     m.category ?? "",
-      volume:       String(m.volume ?? m.volume_24hr ?? "0"),
-      liquidity:    String(m.liquidity ?? "0"),
-      startDate:    m.start_date ?? m.startDate ?? "",
-      endDate:      m.end_date   ?? m.endDate   ?? "",
-      outcomePrices: m.outcome_prices ?? m.outcomePrices ?? "[]",
-      negRisk:      m.neg_risk ?? m.negRisk ?? false,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchClobPage(nextCursor = ""): Promise<{ markets: GammaMarket[]; next: string }> {
-  const url = nextCursor
-    ? `${CLOB_BASE}/markets?next_cursor=${encodeURIComponent(nextCursor)}`
-    : `${CLOB_BASE}/markets`;
-  try {
-    const res = await timedFetch(url);
-    if (!res.ok) { console.error(`[clob] HTTP ${res.status}`); return { markets: [], next: "" }; }
-    const data = await res.json();
-    const raw: any[] = data?.data ?? [];
-    return {
-      markets: raw.map(adaptClobMarket).filter((m): m is GammaMarket => m !== null),
-      next: data?.next_cursor ?? "",
-    };
-  } catch (err: any) {
-    console.error(`[clob] fetch error: ${err?.message ?? err}`);
-    return { markets: [], next: "" };
-  }
-}
-
-// ── Tag slugs ─────────────────────────────────────────────────────────────────
-
-const TAG_SLUGS = [
-  "crypto","bitcoin","ethereum","solana","defi","altcoins",
-  "financials","economics","commodities","forex","stocks",
-  "prices","price-prediction","crypto-prices","up-or-down",
-];
-
-// ── Main export ───────────────────────────────────────────────────────────────
-
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  const slugs = category
-    ? TAG_SLUGS.filter((s) =>
-        category === "crypto"
-          ? ["crypto","bitcoin","ethereum","solana","defi","altcoins","prices","crypto-prices","up-or-down"].includes(s)
-          : ["financials","economics","commodities","forex","stocks","prices"].includes(s)
-      )
-    : TAG_SLUGS;
+  // Exactly the same tag slugs as the original working code, just with limit 200
+  const tags: Array<{ slug: string; cat: MarketCategory }> = category
+    ? [{ slug: category === "crypto" ? "crypto" : "financials", cat: category }]
+    : [
+        { slug: "crypto",     cat: "crypto"  },
+        { slug: "financials", cat: "finance" },
+        { slug: "economics",  cat: "finance" },
+      ];
+
+  // Parallel fetch — same as original
+  const settled = await Promise.allSettled(
+    tags.map(({ slug }) => fetchTagMarkets(slug))
+  );
 
   const raw: GammaMarket[] = [];
-
-  // ── Source 1: Gamma API tag sweeps ──────────────────────────────────────────
-  for (const slug of slugs) {
-    const batch = await gammaFetch(
-      `${GAMMA_BASE}/markets?tag_slug=${encodeURIComponent(slug)}&active=true&closed=false&limit=200`
-    );
-    console.log(`[gamma] slug="${slug}" → ${batch.length}`);
-    raw.push(...batch);
-    await new Promise((r) => setTimeout(r, 80));
+  for (const r of settled) {
+    if (r.status === "fulfilled") raw.push(...r.value);
   }
 
-  // ── Source 2: Gamma API paginated (no tag filter, pages 0-4) ────────────────
-  if (!category) {
-    for (let page = 0; page < 5; page++) {
-      const batch = await gammaFetch(
-        `${GAMMA_BASE}/markets?active=true&closed=false&limit=200&offset=${page * 200}`
-      );
-      console.log(`[gamma] page=${page} → ${batch.length}`);
-      raw.push(...batch);
-      if (batch.length < 200) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
+  console.log(`[gamma] total raw: ${raw.length}`);
 
-  // ── Source 3: CLOB API (if Gamma returned nothing) ──────────────────────────
-  const gammaRaw = raw.length;
-  if (gammaRaw === 0) {
-    console.log("[clob] gamma returned 0 — trying CLOB API");
-    for (let i = 0; i < 5; i++) {
-      const { markets, next } = await fetchClobPage(i === 0 ? "" : String(i * 100));
-      console.log(`[clob] page=${i} → ${markets.length}`);
-      raw.push(...markets);
-      if (!next || markets.length === 0) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-
-  console.log(`[gamma] total raw: ${raw.length} (gamma=${gammaRaw}, clob=${raw.length - gammaRaw})`);
-
-  // Deduplicate → filter → sort
+  // Deduplicate → classify → normalize → sort
   const seen = new Set<string>();
   const results: UpDownMarket[] = [];
+
   for (const m of raw) {
     if (!m.conditionId || seen.has(m.conditionId)) continue;
     seen.add(m.conditionId);
@@ -284,13 +185,15 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
     if (norm) results.push(norm);
   }
 
-  console.log(`[gamma] after filter: ${results.length}`);
+  console.log(`[gamma] after directional filter: ${results.length}`);
   return results.sort((a, b) => b.volume24h - a.volume24h);
 }
 
 export async function fetchMarketByConditionId(conditionId: string): Promise<GammaMarket | null> {
   try {
-    const res = await timedFetch(`${GAMMA_BASE}/markets/${conditionId}`);
+    const res = await fetch(`${GAMMA_BASE}/markets/${conditionId}`, {
+      headers: { Accept: "application/json" },
+    });
     if (!res.ok) return null;
     return await res.json();
   } catch {
