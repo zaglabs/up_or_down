@@ -8,16 +8,21 @@ const STRICT_UP = /^(up|higher|above)$/i;
 const STRICT_DOWN = /^(down|lower|below)$/i;
 
 // ── Question-text patterns for Yes/No markets ─────────────────────────────────
-// A Yes/No market qualifies when the question contains ALL THREE:
+// A Yes/No market qualifies when its question contains BOTH:
 //   1. a direction word  ("up", "down", "higher", "lower", "pump", "bull", …)
-//   2. a timeframe word  ("5 minutes", "1 hour", "daily", "5m", "candle", …)
-//   3. a price asset     ("BTC", "ETH", "gold", "crypto", "nasdaq", …)
+//   2. a price asset     ("BTC", "ETH", "gold", "crypto", "nasdaq", …)
+//
+// Timeframe is intentionally NOT required here: Polymarket often uses absolute
+// timestamps ("at 3:00 PM ET") rather than durations ("in 1 hour"), and those
+// would fail a duration-regex check even though the market is valid.
 const DIRECTION_RE =
-  /\b(up|down|higher|lower|rise|rises|fall|falls|pump|dump|bull(ish)?|bear(ish)?)\b/i;
-const TIMEFRAME_RE =
-  /\b(\d+[\s-]?min(ute)?s?|\d+[\s-]?h(our)?s?|\d+[\s-]?day|today|daily|tonight|weekly|candle|5m|15m|1h|6h|1d|1w)\b/i;
+  /\b(up|down|higher|lower|rise|rises|risen|fall|falls|fallen|pump|dump|bull(ish)?|bear(ish)?|increase|decrease|gain|rally|surge|drop|decline)\b/i;
 const ASSET_RE =
   /\b(btc|eth|sol|xrp|ada|doge|link|avax|matic|dot|uni|atom|near|ftm|algo|xlm|vet|trx|bitcoin|ethereum|solana|crypto|gold|silver|oil|crude|spx|s&p|nasdaq|nasdaq100|forex|eur|gbp|jpy|cad)\b/i;
+
+// Kept for parsePeriod tag-based classification — not used in isUpDownMarket.
+const TIMEFRAME_RE =
+  /\b(\d+[\s-]?min(ute)?s?|\d+[\s-]?h(our)?s?|\d+[\s-]?day|today|daily|tonight|weekly|candle|5m|15m|1h|6h|1d|1w)\b/i;
 
 function isUpDownMarket(market: GammaMarket): boolean {
   if (!market.tokens || market.tokens.length !== 2) return false;
@@ -28,12 +33,13 @@ function isUpDownMarket(market: GammaMarket): boolean {
     return true;
   }
 
-  // Case 2 – Yes/No tokens where the question is about price direction + timeframe + asset
+  // Case 2 – Yes/No tokens: admit only when question is about a price asset moving up/down.
+  // No timeframe check — Polymarket uses absolute timestamps ("at 3:00 PM") not durations.
   const hasYes = outcomes.some((o) => /^yes$/i.test(o));
   const hasNo = outcomes.some((o) => /^no$/i.test(o));
   if (hasYes && hasNo) {
     const text = (market.question ?? "") + " " + (market.description ?? "");
-    return DIRECTION_RE.test(text) && TIMEFRAME_RE.test(text) && ASSET_RE.test(text);
+    return DIRECTION_RE.test(text) && ASSET_RE.test(text);
   }
 
   return false;
