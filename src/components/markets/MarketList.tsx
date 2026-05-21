@@ -18,7 +18,7 @@ export function MarketList() {
 
   const url = category !== "all" ? `/api/markets?category=${category}` : "/api/markets";
   const { data: markets, isLoading, error, mutate } = useSWR<UpDownMarket[]>(url, fetcher, {
-    refreshInterval: 60_000,
+    refreshInterval: 120_000,
   });
 
   const filtered = (markets ?? []).filter((m) => {

@@ -3,7 +3,7 @@ import { fetchUpDownMarkets } from "@/lib/polymarket/gamma";
 import type { MarketCategory } from "@/lib/polymarket/types";
 
 export const runtime = "nodejs";
-export const revalidate = 60;
+export const revalidate = 120;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -11,8 +11,9 @@ export async function GET(request: Request) {
 
   try {
     const markets = await fetchUpDownMarkets(category ?? undefined);
+    console.log(`[markets] ${markets.length} up/down markets returned (category=${category ?? "all"})`);
     return NextResponse.json(markets, {
-      headers: { "Cache-Control": "s-maxage=60, stale-while-revalidate=30" },
+      headers: { "Cache-Control": "s-maxage=120, stale-while-revalidate=60" },
     });
   } catch (err) {
     console.error("Markets API error:", err);
