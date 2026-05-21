@@ -15,16 +15,22 @@ const FINANCIAL_ASSET =
 
 type MarketKind = "directional-token" | "directional-yes-no" | null;
 
+// Parse a field that may be a JS array already or a JSON-encoded string
+function parseArrayField(val: any): string[] {
+  if (Array.isArray(val)) return val.map(String);
+  if (typeof val === "string" && val.trim().startsWith("[")) {
+    try { return JSON.parse(val); } catch {}
+  }
+  return [];
+}
+
 function buildTokens(market: GammaMarket): GammaMarket["tokens"] {
   if (Array.isArray(market.tokens) && market.tokens.length === 2) return market.tokens;
-  // Gamma list API stores outcome names in a JSON string field `outcomes`
-  let outcomeNames: string[] = [];
-  try { outcomeNames = JSON.parse((market as any).outcomes ?? "[]"); } catch {}
+  // Gamma list API stores outcome names in `outcomes` — may be array or JSON string
+  const outcomeNames = parseArrayField((market as any).outcomes ?? []);
   if (outcomeNames.length !== 2) return [];
-  let prices: string[] = [];
-  try { prices = JSON.parse(market.outcomePrices ?? "[]"); } catch {}
-  let clobIds: string[] = [];
-  try { clobIds = JSON.parse((market as any).clobTokenIds ?? "[]"); } catch {}
+  const prices  = parseArrayField(market.outcomePrices ?? []);
+  const clobIds = parseArrayField((market as any).clobTokenIds ?? []);
   return outcomeNames.map((name, i) => ({
     outcome: name,
     tokenId: clobIds[i] ?? "",

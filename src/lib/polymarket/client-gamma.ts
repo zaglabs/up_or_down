@@ -19,6 +19,15 @@ const FINANCIAL_ASSET =
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Parse a field that may be either a JS array already or a JSON-encoded string
+function parseArrayField(val: any): string[] {
+  if (Array.isArray(val)) return val.map(String);
+  if (typeof val === "string" && val.trim().startsWith("[")) {
+    try { return JSON.parse(val); } catch {}
+  }
+  return [];
+}
+
 function parseAsset(q: string): string {
   const patterns = [
     /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|BNB|SHIB|PEPE|TRX|ALGO|XLM|VET)\b/,
@@ -66,23 +75,18 @@ export function normaliseMarket(m: any): UpDownMarket | null {
   const conditionId = m.conditionId ?? m.condition_id;
   if (!conditionId) return null;
 
-  // Parse outcome prices and token IDs regardless of token source
-  let outcomePrices: string[] = [];
-  try { outcomePrices = JSON.parse(m.outcomePrices ?? m.outcome_prices ?? "[]"); } catch {}
-
-  let clobTokenIds: string[] = [];
-  try { clobTokenIds = JSON.parse(m.clobTokenIds ?? m.clob_token_ids ?? "[]"); } catch {}
+  // outcomePrices and clobTokenIds can be either arrays or JSON strings
+  const outcomePrices  = parseArrayField(m.outcomePrices  ?? m.outcome_prices  ?? []);
+  const clobTokenIds   = parseArrayField(m.clobTokenIds   ?? m.clob_token_ids  ?? []);
 
   // ── Build a normalised tokens array ────────────────────────────────────────
-  // The Gamma list API returns outcomes as a JSON string in `outcomes`, not
-  // as a populated `tokens` array. Reconstruct synthetic token objects so the
-  // rest of the pipeline is unchanged.
+  // The Gamma list API returns outcome names in `outcomes` (array or JSON string),
+  // while the tokens array is usually empty for list responses.
   let tokens: any[] = Array.isArray(m.tokens) && m.tokens.length === 2 ? m.tokens : [];
 
   if (tokens.length !== 2) {
-    // Try parsing the `outcomes` JSON string (e.g. '["Higher","Lower"]')
-    let outcomeNames: string[] = [];
-    try { outcomeNames = JSON.parse(m.outcomes ?? m.outcome_names ?? "[]"); } catch {}
+    // outcomes may be an array ["Higher","Lower"] or JSON string '["Higher","Lower"]'
+    const outcomeNames = parseArrayField(m.outcomes ?? m.outcome_names ?? []);
 
     if (outcomeNames.length === 2) {
       tokens = outcomeNames.map((name: string, i: number) => ({
@@ -96,7 +100,6 @@ export function normaliseMarket(m: any): UpDownMarket | null {
   if (tokens.length !== 2) return null;
 
   const getOutcome = (t: any) => String(t.outcome ?? t.outcome_name ?? "").trim();
-
   const outcomes = tokens.map(getOutcome);
 
   // ── Tier 1: literal directional tokens ────────────────────────────────────
@@ -116,7 +119,6 @@ export function normaliseMarket(m: any): UpDownMarket | null {
     const noT  = tokens.find((t) => getOutcome(t).toLowerCase() === "no");
     if (!yesT || !noT) return null;
 
-    // Bearish-framed question → Yes means price went DOWN
     const bearish = /\b(fall|drop|crash|below|lower|decline|lose|dump|go down|end below|close below|finish below|stay below|trade below)\b/i.test(question);
     upToken   = bearish ? noT  : yesT;
     downToken = bearish ? yesT : noT;
@@ -135,8 +137,8 @@ export function normaliseMarket(m: any): UpDownMarket | null {
   const downPrice = getPrice(downToken) || parseFloat(outcomePrices[downIdx] ?? "0.5") || 0.5;
 
   const question = m.question ?? "";
-  const endDate  = m.endDateIso ?? m.end_date_iso ?? m.endDate ?? m.end_date ?? "";
-  const startDate = m.startDate ?? m.start_date ?? "";
+  const endDate   = m.endDateIso ?? m.end_date_iso ?? m.endDate ?? m.end_date ?? "";
+  const startDate = m.startDate  ?? m.start_date   ?? "";
 
   return {
     conditionId,
@@ -144,12 +146,12 @@ export function normaliseMarket(m: any): UpDownMarket | null {
     asset:       parseAsset(question),
     period:      parsePeriod(question, endDate, startDate),
     endDateIso:  endDate,
-    upTokenId:   upToken.tokenId ?? upToken.token_id ?? "",
+    upTokenId:   upToken.tokenId   ?? upToken.token_id   ?? "",
     downTokenId: downToken.tokenId ?? downToken.token_id ?? "",
-    upPrice:     isNaN(upPrice)   ? 0.5 : upPrice,
-    downPrice:   isNaN(downPrice) ? 0.5 : downPrice,
-    volume24h:   parseFloat(m.volume ?? m.volume_24hr ?? "0") || 0,
-    liquidity:   parseFloat(m.liquidity ?? "0") || 0,
+    upPrice:     isNaN(upPrice)    ? 0.5 : upPrice,
+    downPrice:   isNaN(downPrice)  ? 0.5 : downPrice,
+    volume24h:   parseFloat(m.volume ?? m.volumeNum ?? m.volume_24hr ?? "0") || 0,
+    liquidity:   parseFloat(m.liquidity ?? m.liquidityNum ?? "0") || 0,
     negRisk:     m.negRisk ?? m.neg_risk ?? false,
     category:    detectCategory(m),
     slug:        m.slug ?? m.market_slug ?? "",
@@ -178,16 +180,40 @@ async function tryFetch(url: string): Promise<any[] | null> {
   }
 }
 
-async function fetchSlug(slug: string, useProxy = false): Promise<any[]> {
-  const target = `${GAMMA_BASE}/markets?tag_slug=${encodeURIComponent(slug)}&active=true&closed=false&limit=200`;
-  const url    = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
-  return (await tryFetch(url)) ?? [];
+// Paginate a single tag slug: fetches `pages` pages of 100 each
+async function fetchSlugPaginated(slug: string, pages: number, useProxy = false): Promise<any[]> {
+  const results: any[] = [];
+  for (let page = 0; page < pages; page++) {
+    const target = [
+      `${GAMMA_BASE}/markets`,
+      `?tag_slug=${encodeURIComponent(slug)}`,
+      `&active=true&closed=false`,
+      `&limit=100&offset=${page * 100}`,
+    ].join("");
+    const url = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
+    const batch = (await tryFetch(url)) ?? [];
+    results.push(...batch);
+    if (batch.length < 100) break; // reached last page
+  }
+  return results;
 }
 
-async function fetchNoFilter(useProxy = false): Promise<any[]> {
-  const target = `${GAMMA_BASE}/markets?active=true&closed=false&limit=100`;
-  const url    = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
-  return (await tryFetch(url)) ?? [];
+// Fetch top markets by volume without tag filter
+async function fetchByVolume(pages: number, useProxy = false): Promise<any[]> {
+  const results: any[] = [];
+  for (let page = 0; page < pages; page++) {
+    const target = [
+      `${GAMMA_BASE}/markets`,
+      `?active=true&closed=false`,
+      `&limit=100&offset=${page * 100}`,
+      `&order=volumeNum&ascending=false`,
+    ].join("");
+    const url = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
+    const batch = (await tryFetch(url)) ?? [];
+    results.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return results;
 }
 
 function storeDiag(key: string, value: any) {
@@ -201,22 +227,25 @@ export interface FetchDiagnostics {
   filteredTotal: number;
   usingProxy: boolean;
   slugBreakdown: Record<string, number>;
-  sampleOutcomes: string[];   // first few market token pairs seen
+  sampleOutcomes: string[];
   error?: string;
 }
-
-// ── Main export ───────────────────────────────────────────────────────────────
-
-const SLUGS_CRYPTO  = ["crypto", "bitcoin", "ethereum", "solana", "defi"];
-const SLUGS_FINANCE = ["financials", "economics", "commodities", "stocks", "prices"];
-const SLUGS_EXTRA   = ["up-or-down", "price-prediction", "markets"];
-const SLUGS_ALL     = [...SLUGS_CRYPTO, ...SLUGS_FINANCE, ...SLUGS_EXTRA];
 
 let lastDiagnostics: FetchDiagnostics | null = null;
 
 export function getLastDiagnostics(): FetchDiagnostics | null {
   return lastDiagnostics;
 }
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+// Key slugs only — fewer slugs, more pages each = deeper coverage per category
+const SLUGS_CRYPTO  = ["crypto", "bitcoin", "ethereum", "solana"];
+const SLUGS_FINANCE = ["financials", "economics", "commodities"];
+const SLUGS_ALL     = [...SLUGS_CRYPTO, ...SLUGS_FINANCE];
+
+// Pages per slug: 3 pages × 100 = up to 300 markets per slug → ~2100 unique raw markets
+const PAGES_PER_SLUG = 3;
 
 export async function fetchMarketsClient(category?: MarketCategory): Promise<UpDownMarket[]> {
   const slugs =
@@ -228,62 +257,56 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
   let usingProxy = false;
   const slugBreakdown: Record<string, number> = {};
 
-  // ── Pass 1: direct fetch ───────────────────────────────────────────────────
-  const directResults = await Promise.all(slugs.map((s) => fetchSlug(s, false)));
+  // ── Pass 1: paginated slug fetch (direct) ─────────────────────────────────
+  const directResults = await Promise.all(
+    slugs.map((s) => fetchSlugPaginated(s, PAGES_PER_SLUG, false))
+  );
   for (let i = 0; i < slugs.length; i++) {
     const batch = directResults[i];
-    slugBreakdown[slugs[i]] = (slugBreakdown[slugs[i]] ?? 0) + batch.length;
+    slugBreakdown[slugs[i]] = batch.length;
     console.log(`[polymarket] direct slug="${slugs[i]}" → ${batch.length} markets`);
-    if (batch.length > 0) {
-      console.log(`[polymarket]   first outcomes: ${batch.slice(0, 3).map((m: any) => m.tokens?.map((t: any) => t.outcome).join("/")).join(", ")}`);
-    }
     raw.push(...batch);
   }
 
-  // ── Pass 2: CORS proxy fallback ───────────────────────────────────────────
+  // ── Pass 2: top markets by volume (direct) ────────────────────────────────
+  // Fetch 3 pages of top-volume markets; these are most likely to be financial
+  const volResults = await fetchByVolume(3, false);
+  slugBreakdown["__volume"] = volResults.length;
+  console.log(`[polymarket] direct volume-sorted → ${volResults.length} markets`);
+  raw.push(...volResults);
+
+  // ── Pass 3: CORS proxy fallback if we got nothing ─────────────────────────
   if (raw.length === 0) {
     console.log("[polymarket] direct returned 0 — trying CORS proxy");
     usingProxy = true;
-    const proxyResults = await Promise.all(slugs.map((s) => fetchSlug(s, true)));
+    const proxyResults = await Promise.all(
+      slugs.map((s) => fetchSlugPaginated(s, PAGES_PER_SLUG, true))
+    );
     for (let i = 0; i < slugs.length; i++) {
       const batch = proxyResults[i];
       slugBreakdown[`proxy:${slugs[i]}`] = batch.length;
-      console.log(`[polymarket] proxy  slug="${slugs[i]}" → ${batch.length} markets`);
       raw.push(...batch);
     }
-  }
-
-  // ── Pass 3: no-filter fallback if still empty ─────────────────────────────
-  if (raw.length === 0) {
-    console.log("[polymarket] slug fetch returned 0 — trying unfiltered endpoint");
-    raw = await fetchNoFilter(false);
-    if (raw.length === 0) {
-      raw = await fetchNoFilter(true);
-      usingProxy = true;
-    }
-    slugBreakdown["__unfiltered"] = raw.length;
-    console.log(`[polymarket] unfiltered → ${raw.length} markets`);
+    const proxyVol = await fetchByVolume(3, true);
+    slugBreakdown["proxy:__volume"] = proxyVol.length;
+    raw.push(...proxyVol);
   }
 
   storeDiag("rawTotal", raw.length);
-  console.log(`[polymarket] total raw: ${raw.length}`);
+  console.log(`[polymarket] total raw (before dedup): ${raw.length}`);
 
-  // Sample outcomes for diagnostics — show both tokens and the outcomes JSON string
-  const sampleOutcomes = raw
-    .slice(0, 10)
-    .map((m: any) => {
-      const tokenOuts = Array.isArray(m.tokens) && m.tokens.length
-        ? m.tokens.map((t: any) => t.outcome ?? "?").join(" / ")
-        : null;
-      let outcomeStr = tokenOuts;
-      if (!outcomeStr) {
-        try {
-          const parsed = JSON.parse(m.outcomes ?? m.outcome_names ?? "[]");
-          outcomeStr = Array.isArray(parsed) ? parsed.join(" / ") : "?";
-        } catch { outcomeStr = "?"; }
-      }
-      return `"${(m.question ?? "").slice(0, 60)}…" → [${outcomeStr ?? ""}]`;
+  // Sample raw market to show actual field names for debugging
+  if (raw.length > 0) {
+    const sample = raw[0];
+    console.log("[polymarket] sample market fields:", {
+      conditionId: sample.conditionId,
+      question: (sample.question ?? "").slice(0, 80),
+      outcomes: sample.outcomes,
+      outcomePrices: sample.outcomePrices,
+      tokens: sample.tokens,
+      clobTokenIds: sample.clobTokenIds,
     });
+  }
 
   // ── Filter & deduplicate ──────────────────────────────────────────────────
   const seen = new Set<string>();
@@ -299,6 +322,14 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
 
   storeDiag("filteredTotal", results.length);
   console.log(`[polymarket] after directional filter: ${results.length}`);
+
+  // Build diagnostics — show raw outcomes field type for first 10 markets
+  const sampleOutcomes = raw.slice(0, 10).map((m: any) => {
+    const rawOut = m.outcomes ?? m.tokens;
+    const outArr = parseArrayField(rawOut ?? []);
+    const outStr = outArr.length ? outArr.join(" / ") : `RAW:${JSON.stringify(rawOut ?? null).slice(0, 40)}`;
+    return `"${(m.question ?? "").slice(0, 55)}…" → [${outStr}]`;
+  });
 
   lastDiagnostics = {
     rawTotal: raw.length,
