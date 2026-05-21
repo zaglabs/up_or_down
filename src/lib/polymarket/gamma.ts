@@ -2,9 +2,10 @@ import type { GammaMarket, UpDownMarket, MarketCategory, MarketPeriod } from "./
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
-// Strictly literal directional outcomes — excludes Yes/No binary markets
-const UP_PATTERNS = /^(up|higher|above)$/i;
-const DOWN_PATTERNS = /^(down|lower|below)$/i;
+// Strictly directional outcomes — excludes Yes/No binary markets.
+// Start-anchored so "Higher than $X" or "Up ↑" still match, but "Yes" never does.
+const UP_PATTERNS = /^(up|higher|above)\b/i;
+const DOWN_PATTERNS = /^(down|lower|below)\b/i;
 
 function isStrictUpDownMarket(market: GammaMarket): boolean {
   if (!market.tokens || market.tokens.length !== 2) return false;
@@ -119,8 +120,6 @@ async function fetchGammaPage(offset: number, limit = 200): Promise<GammaMarket[
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
   // Sort by volume descending so high-activity Up/Down markets surface first
-  url.searchParams.set("order", "volume");
-  url.searchParams.set("ascending", "false");
 
   const res = await fetch(url.toString(), {
     headers: { Accept: "application/json" },
@@ -145,8 +144,6 @@ async function fetchTagSlug(
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
   url.searchParams.set("limit", String(limit));
-  url.searchParams.set("order", "volume");
-  url.searchParams.set("ascending", "false");
 
   const res = await fetch(url.toString(), {
     headers: { Accept: "application/json" },
