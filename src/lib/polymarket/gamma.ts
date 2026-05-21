@@ -153,13 +153,35 @@ async function fetchTagMarkets(tagSlug: string): Promise<GammaMarket[]> {
 }
 
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  // Exactly the same tag slugs as the original working code, just with limit 200
-  const tags: Array<{ slug: string; cat: MarketCategory }> = category
-    ? [{ slug: category === "crypto" ? "crypto" : "financials", cat: category }]
+  const tags: Array<{ slug: string; cat: MarketCategory }> = category === "crypto"
+    ? [
+        { slug: "crypto",     cat: "crypto" },
+        { slug: "bitcoin",    cat: "crypto" },
+        { slug: "ethereum",   cat: "crypto" },
+        { slug: "solana",     cat: "crypto" },
+        { slug: "defi",       cat: "crypto" },
+      ]
+    : category === "finance"
+    ? [
+        { slug: "financials",  cat: "finance" },
+        { slug: "economics",   cat: "finance" },
+        { slug: "commodities", cat: "finance" },
+        { slug: "stocks",      cat: "finance" },
+        { slug: "prices",      cat: "finance" },
+      ]
     : [
-        { slug: "crypto",     cat: "crypto"  },
-        { slug: "financials", cat: "finance" },
-        { slug: "economics",  cat: "finance" },
+        { slug: "crypto",          cat: "crypto"  },
+        { slug: "bitcoin",         cat: "crypto"  },
+        { slug: "ethereum",        cat: "crypto"  },
+        { slug: "solana",          cat: "crypto"  },
+        { slug: "defi",            cat: "crypto"  },
+        { slug: "financials",      cat: "finance" },
+        { slug: "economics",       cat: "finance" },
+        { slug: "commodities",     cat: "finance" },
+        { slug: "stocks",          cat: "finance" },
+        { slug: "prices",          cat: "finance" },
+        { slug: "up-or-down",      cat: "finance" },
+        { slug: "price-prediction",cat: "finance" },
       ];
 
   // Parallel fetch — same as original

@@ -3,9 +3,9 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { MarketCard } from "./MarketCard";
-import { fetchMarketsClient } from "@/lib/polymarket/client-gamma";
+import { fetchMarketsClient, getLastDiagnostics } from "@/lib/polymarket/client-gamma";
 import type { UpDownMarket, MarketCategory, MarketPeriod } from "@/lib/polymarket/types";
-import { RefreshCw, AlertCircle } from "lucide-react";
+import { RefreshCw, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
 
 const PERIODS: Array<MarketPeriod | "all"> = ["all", "5m", "15m", "1h", "6h", "1d", "1w"];
 const CATEGORIES: Array<MarketCategory | "all"> = ["all", "crypto", "finance"];
@@ -14,9 +14,8 @@ export function MarketList() {
   const [category, setCategory] = useState<MarketCategory | "all">("all");
   const [period, setPeriod]     = useState<MarketPeriod | "all">("all");
   const [search, setSearch]     = useState("");
+  const [showDiag, setShowDiag] = useState(false);
 
-  // Fetch directly from Polymarket in the browser — bypasses the Next.js server
-  // so network restrictions on the server don't affect market loading.
   const swrKey = `polymarket-markets-${category}`;
   const { data: markets, isLoading, error, mutate } = useSWR<UpDownMarket[]>(
     swrKey,
@@ -34,6 +33,8 @@ export function MarketList() {
       return false;
     return true;
   });
+
+  const diag = getLastDiagnostics();
 
   return (
     <div className="space-y-4">
@@ -82,7 +83,7 @@ export function MarketList() {
       </div>
 
       {/* Count */}
-      {!isLoading && !error && markets !== undefined && (
+      {!isLoading && !error && markets !== undefined && markets.length > 0 && (
         <p className="text-xs text-zinc-500">
           {filtered.length} market{filtered.length !== 1 ? "s" : ""} shown
           {(period !== "all" || search) && markets.length !== filtered.length
@@ -119,13 +120,75 @@ export function MarketList() {
 
       {/* Empty */}
       {!isLoading && !error && markets !== undefined && filtered.length === 0 && (
-        <div className="rounded-xl border border-zinc-800 p-8 text-center space-y-2">
+        <div className="rounded-xl border border-zinc-800 p-6 text-center space-y-3">
           <p className="text-zinc-400 font-medium">No directional markets found</p>
-          <p className="text-zinc-600 text-xs max-w-sm mx-auto">
-            {markets.length === 0
-              ? "Polymarket returned 0 markets — check your browser's DevTools console (Network tab) for the request to gamma-api.polymarket.com."
-              : `${markets.length} markets from Polymarket but none matched the price-direction filter${period !== "all" ? ` for "${period}"` : ""}.`}
-          </p>
+
+          {diag ? (
+            <div className="text-left space-y-2">
+              {/* Summary row */}
+              <div className="flex gap-4 justify-center text-xs">
+                <span className={diag.rawTotal === 0 ? "text-red-400" : "text-amber-400"}>
+                  API returned: <strong>{diag.rawTotal}</strong> raw markets
+                  {diag.usingProxy ? " (via CORS proxy)" : " (direct)"}
+                </span>
+                <span className="text-zinc-500">→</span>
+                <span className="text-zinc-400">
+                  Directional filter: <strong>{diag.filteredTotal}</strong> matched
+                </span>
+              </div>
+
+              {diag.rawTotal === 0 ? (
+                <p className="text-xs text-red-500 text-center">
+                  Polymarket API is not reachable from your browser. Check the Network tab in DevTools
+                  for requests to gamma-api.polymarket.com or corsproxy.io.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  <p className="text-xs text-amber-500 text-center">
+                    Got {diag.rawTotal} markets from Polymarket, but none have Up/Down/Higher/Lower/Above/Below outcomes.
+                    <br />
+                    Directional Yes/No markets (e.g. "Will BTC be higher?") are also included.
+                  </p>
+
+                  {/* Expandable sample */}
+                  <button
+                    onClick={() => setShowDiag((v) => !v)}
+                    className="flex items-center gap-1 mx-auto text-xs text-zinc-500 hover:text-zinc-300"
+                  >
+                    {showDiag ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    {showDiag ? "Hide" : "Show"} sample markets from API
+                  </button>
+
+                  {showDiag && diag.sampleOutcomes.length > 0 && (
+                    <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3 text-left space-y-1">
+                      {diag.sampleOutcomes.map((s, i) => (
+                        <p key={i} className="text-xs text-zinc-500 font-mono break-all">{s}</p>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Slug breakdown */}
+                  {showDiag && (
+                    <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3 text-left">
+                      <p className="text-xs text-zinc-600 mb-1">Per-slug counts:</p>
+                      {Object.entries(diag.slugBreakdown).map(([slug, count]) => (
+                        <p key={slug} className="text-xs text-zinc-500 font-mono">
+                          {slug}: {count}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-zinc-600 text-xs max-w-sm mx-auto">
+              {markets.length === 0
+                ? "Polymarket returned 0 markets — check your browser's DevTools console (Network tab) for the request to gamma-api.polymarket.com."
+                : `${markets.length} markets from Polymarket but none matched the price-direction filter${period !== "all" ? ` for "${period}"` : ""}.`}
+            </p>
+          )}
+
           <button onClick={() => mutate()} className="text-xs text-zinc-500 underline hover:text-zinc-300">
             Try again
           </button>

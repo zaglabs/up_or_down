@@ -1,27 +1,34 @@
-// Client-side Polymarket fetcher — runs in the browser, not on the server.
-// Bypasses the Next.js API route so the browser's network stack (not Node.js)
-// makes the request to gamma-api.polymarket.com.
+// Client-side Polymarket fetcher — runs in the browser.
+// Tries direct fetch first, then a CORS proxy if the direct call is blocked.
 
 import type { UpDownMarket, MarketCategory, MarketPeriod } from "./types";
 
-const GAMMA_BASE = "https://gamma-api.polymarket.com";
+const GAMMA_BASE  = "https://gamma-api.polymarket.com";
+const CORS_PROXY  = "https://corsproxy.io/?url=";
 
+// ── Outcome matchers (Tier 1) ─────────────────────────────────────────────────
 const TOKEN_UP   = /^(up|higher|above)\b/i;
 const TOKEN_DOWN = /^(down|lower|below)\b/i;
 
+// ── Question matchers (Tier 2: Yes/No markets about price direction) ──────────
 const DIRECTION_WORDS =
-  /\b(higher|lower|above|below|exceed|surpass|reach|break|rally|rise|fall|drop|crash|gain|lose|bullish|bearish|pump|dump|outperform|underperform)\b/i;
+  /\b(higher|lower|above|below|up|down|exceed|surpass|reach|hit|cross|touch|break|rally|rise|fall|drop|crash|gain|lose|bullish|bearish|pump|dump|outperform|underperform|increase|decrease|appreciate|depreciate|surge|spike|plunge|climb|dip|recover|rebound|correct|advance|decline|overtake|close above|close below|end above|end below|finish above|finish below|go above|go below|go up|go down|be above|be below|trade above|trade below|stay above|stay below)\b/i;
 
 const FINANCIAL_ASSET =
-  /\b(btc|bitcoin|eth|ethereum|sol|solana|doge|dogecoin|xrp|ripple|bnb|ada|cardano|avax|avalanche|matic|polygon|link|chainlink|uni|uniswap|dot|polkadot|atom|near|ltc|bch|shib|pepe|trx|algo|crypto|s&p|spx|sp500|nasdaq|dow|gold|silver|oil|crude|eur|gbp|jpy|forex|stock|index|equity)\b/i;
+  /\b(btc|bitcoin|eth|ethereum|sol|solana|doge|dogecoin|xrp|ripple|bnb|ada|cardano|avax|avalanche|matic|polygon|link|chainlink|uni|uniswap|dot|polkadot|atom|cosmos|near|ltc|litecoin|bch|shib|pepe|trx|tron|algo|xlm|stellar|vet|ftm|fantom|crypto|s&p|spx|sp500|nasdaq|qqq|dow|djia|gold|silver|oil|crude|wti|brent|eur|gbp|jpy|aud|cad|chf|forex|stock|index|equity|commodity|nifty|dax|ftse|cac)\b/i;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseAsset(q: string): string {
-  const p = [
-    /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|BNB|SHIB|PEPE)\b/,
+  const patterns = [
+    /\b(BTC|ETH|SOL|DOGE|ADA|MATIC|AVAX|LINK|DOT|UNI|XRP|LTC|BCH|ATOM|NEAR|FTM|BNB|SHIB|PEPE|TRX|ALGO|XLM|VET)\b/,
     /\b(bitcoin|ethereum|solana|dogecoin|cardano|polygon|avalanche|chainlink|polkadot|uniswap|ripple|litecoin)\b/i,
     /\b(S&P|SPX|NASDAQ|gold|silver|oil|crude|EUR|GBP|JPY)\b/i,
   ];
-  for (const rx of p) { const m = q.match(rx); if (m) return m[1].toUpperCase(); }
+  for (const p of patterns) {
+    const m = q.match(p);
+    if (m) return m[1].toUpperCase();
+  }
   const cap = q.match(/\b([A-Z]{2,6})\b/);
   return cap ? cap[1] : "ASSET";
 }
@@ -53,26 +60,38 @@ function detectCategory(m: any): MarketCategory {
   return "finance";
 }
 
-function normalizeOne(m: any): UpDownMarket | null {
-  if (!m.conditionId || !Array.isArray(m.tokens) || m.tokens.length !== 2) return null;
+// ── Normalise a raw market object ─────────────────────────────────────────────
 
-  const outcomes: string[] = m.tokens.map((t: any) => String(t.outcome ?? "").trim());
+export function normaliseMarket(m: any): UpDownMarket | null {
+  const conditionId = m.conditionId ?? m.condition_id;
+  if (!conditionId) return null;
 
-  let upToken   = m.tokens.find((t: any) => TOKEN_UP.test(String(t.outcome ?? "").trim()));
-  let downToken = m.tokens.find((t: any) => TOKEN_DOWN.test(String(t.outcome ?? "").trim()));
+  const tokens: any[] = m.tokens ?? [];
+  if (!Array.isArray(tokens) || tokens.length !== 2) return null;
 
+  const getOutcome = (t: any) => String(t.outcome ?? t.outcome_name ?? "").trim();
+
+  const outcomes = tokens.map(getOutcome);
+
+  // ── Tier 1: literal directional tokens ────────────────────────────────────
+  let upToken   = tokens.find((t) => TOKEN_UP.test(getOutcome(t)));
+  let downToken = tokens.find((t) => TOKEN_DOWN.test(getOutcome(t)));
+
+  // ── Tier 2: Yes/No with directional question about a financial asset ───────
   if (!upToken || !downToken) {
-    // Fall back to Yes/No directional
     const norm = outcomes.map((o) => o.toLowerCase()).sort().join("|");
     if (norm !== "no|yes") return null;
-    if (!FINANCIAL_ASSET.test(m.question ?? "")) return null;
-    if (!DIRECTION_WORDS.test(m.question ?? "")) return null;
 
-    const yesT = m.tokens.find((t: any) => t.outcome?.trim().toLowerCase() === "yes");
-    const noT  = m.tokens.find((t: any) => t.outcome?.trim().toLowerCase() === "no");
+    const question = m.question ?? "";
+    if (!FINANCIAL_ASSET.test(question)) return null;
+    if (!DIRECTION_WORDS.test(question)) return null;
+
+    const yesT = tokens.find((t) => getOutcome(t).toLowerCase() === "yes");
+    const noT  = tokens.find((t) => getOutcome(t).toLowerCase() === "no");
     if (!yesT || !noT) return null;
 
-    const bearish = /\b(fall|drop|crash|below|lower|decline|lose|dump)\b/i.test(m.question ?? "");
+    // Bearish-framed question → Yes means price went DOWN
+    const bearish = /\b(fall|drop|crash|below|lower|decline|lose|dump|go down|end below|close below|finish below|stay below|trade below)\b/i.test(question);
     upToken   = bearish ? noT  : yesT;
     downToken = bearish ? yesT : noT;
   }
@@ -80,56 +99,180 @@ function normalizeOne(m: any): UpDownMarket | null {
   if (!upToken || !downToken) return null;
 
   let outcomePrices: string[] = [];
-  try { outcomePrices = JSON.parse(m.outcomePrices ?? "[]"); } catch {}
+  try { outcomePrices = JSON.parse(m.outcomePrices ?? m.outcome_prices ?? "[]"); } catch {}
 
-  const upPrice   = upToken.price   ?? parseFloat(outcomePrices[0] ?? "0.5");
-  const downPrice = downToken.price ?? parseFloat(outcomePrices[1] ?? "0.5");
+  const getPrice = (t: any) => {
+    const v = t.price ?? t.token_price;
+    return typeof v === "string" ? parseFloat(v) : (typeof v === "number" ? v : NaN);
+  };
+
+  const upPrice   = getPrice(upToken)   || parseFloat(outcomePrices[0] ?? "0.5") || 0.5;
+  const downPrice = getPrice(downToken) || parseFloat(outcomePrices[1] ?? "0.5") || 0.5;
+
+  const question = m.question ?? "";
+  const endDate  = m.endDateIso ?? m.end_date_iso ?? m.endDate ?? m.end_date ?? "";
+  const startDate = m.startDate ?? m.start_date ?? "";
 
   return {
-    conditionId: m.conditionId,
-    question:    m.question ?? "",
-    asset:       parseAsset(m.question ?? ""),
-    period:      parsePeriod(m.question ?? "", m.endDateIso ?? m.endDate ?? "", m.startDate ?? ""),
-    endDateIso:  m.endDateIso ?? m.endDate ?? "",
-    upTokenId:   upToken.tokenId,
-    downTokenId: downToken.tokenId,
+    conditionId,
+    question,
+    asset:       parseAsset(question),
+    period:      parsePeriod(question, endDate, startDate),
+    endDateIso:  endDate,
+    upTokenId:   upToken.tokenId ?? upToken.token_id ?? "",
+    downTokenId: downToken.tokenId ?? downToken.token_id ?? "",
     upPrice:     isNaN(upPrice)   ? 0.5 : upPrice,
     downPrice:   isNaN(downPrice) ? 0.5 : downPrice,
-    volume24h:   parseFloat(m.volume   ?? "0"),
-    liquidity:   parseFloat(m.liquidity ?? "0"),
-    negRisk:     m.negRisk ?? false,
+    volume24h:   parseFloat(m.volume ?? m.volume_24hr ?? "0") || 0,
+    liquidity:   parseFloat(m.liquidity ?? "0") || 0,
+    negRisk:     m.negRisk ?? m.neg_risk ?? false,
     category:    detectCategory(m),
-    slug:        m.slug ?? "",
+    slug:        m.slug ?? m.market_slug ?? "",
   };
 }
 
-async function fetchSlug(slug: string): Promise<any[]> {
-  const res = await fetch(
-    `${GAMMA_BASE}/markets?tag_slug=${slug}&active=true&closed=false&limit=200`,
-    { headers: { Accept: "application/json" } }
-  );
-  if (!res.ok) return [];
-  const data = await res.json();
-  return Array.isArray(data) ? data : (data.markets ?? []);
+// ── Network helpers ───────────────────────────────────────────────────────────
+
+async function tryFetch(url: string): Promise<any[] | null> {
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) {
+      console.warn(`[polymarket] HTTP ${res.status}: ${url}`);
+      return null;
+    }
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data.markets ?? data.data ?? null);
+    if (!Array.isArray(list)) {
+      console.warn("[polymarket] unexpected shape:", JSON.stringify(data).slice(0, 200));
+      return null;
+    }
+    return list;
+  } catch (err) {
+    console.warn(`[polymarket] fetch error (${url}):`, err);
+    return null;
+  }
+}
+
+async function fetchSlug(slug: string, useProxy = false): Promise<any[]> {
+  const target = `${GAMMA_BASE}/markets?tag_slug=${encodeURIComponent(slug)}&active=true&closed=false&limit=200`;
+  const url    = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
+  return (await tryFetch(url)) ?? [];
+}
+
+async function fetchNoFilter(useProxy = false): Promise<any[]> {
+  const target = `${GAMMA_BASE}/markets?active=true&closed=false&limit=100`;
+  const url    = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
+  return (await tryFetch(url)) ?? [];
+}
+
+function storeDiag(key: string, value: any) {
+  try { (window as any).__pmDiag = { ...((window as any).__pmDiag ?? {}), [key]: value }; } catch {}
+}
+
+// ── Diagnostic result type ────────────────────────────────────────────────────
+
+export interface FetchDiagnostics {
+  rawTotal: number;
+  filteredTotal: number;
+  usingProxy: boolean;
+  slugBreakdown: Record<string, number>;
+  sampleOutcomes: string[];   // first few market token pairs seen
+  error?: string;
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+const SLUGS_CRYPTO  = ["crypto", "bitcoin", "ethereum", "solana", "defi"];
+const SLUGS_FINANCE = ["financials", "economics", "commodities", "stocks", "prices"];
+const SLUGS_EXTRA   = ["up-or-down", "price-prediction", "markets"];
+const SLUGS_ALL     = [...SLUGS_CRYPTO, ...SLUGS_FINANCE, ...SLUGS_EXTRA];
+
+let lastDiagnostics: FetchDiagnostics | null = null;
+
+export function getLastDiagnostics(): FetchDiagnostics | null {
+  return lastDiagnostics;
 }
 
 export async function fetchMarketsClient(category?: MarketCategory): Promise<UpDownMarket[]> {
   const slugs =
-    category === "crypto"  ? ["crypto", "bitcoin", "ethereum", "solana"] :
-    category === "finance" ? ["financials", "economics", "commodities"] :
-    ["crypto", "bitcoin", "ethereum", "financials", "economics"];
+    category === "crypto"  ? SLUGS_CRYPTO :
+    category === "finance" ? SLUGS_FINANCE :
+    SLUGS_ALL;
 
-  const batches = await Promise.all(slugs.map(fetchSlug));
-  const raw: any[] = batches.flat();
+  let raw: any[] = [];
+  let usingProxy = false;
+  const slugBreakdown: Record<string, number> = {};
 
+  // ── Pass 1: direct fetch ───────────────────────────────────────────────────
+  const directResults = await Promise.all(slugs.map((s) => fetchSlug(s, false)));
+  for (let i = 0; i < slugs.length; i++) {
+    const batch = directResults[i];
+    slugBreakdown[slugs[i]] = (slugBreakdown[slugs[i]] ?? 0) + batch.length;
+    console.log(`[polymarket] direct slug="${slugs[i]}" → ${batch.length} markets`);
+    if (batch.length > 0) {
+      console.log(`[polymarket]   first outcomes: ${batch.slice(0, 3).map((m: any) => m.tokens?.map((t: any) => t.outcome).join("/")).join(", ")}`);
+    }
+    raw.push(...batch);
+  }
+
+  // ── Pass 2: CORS proxy fallback ───────────────────────────────────────────
+  if (raw.length === 0) {
+    console.log("[polymarket] direct returned 0 — trying CORS proxy");
+    usingProxy = true;
+    const proxyResults = await Promise.all(slugs.map((s) => fetchSlug(s, true)));
+    for (let i = 0; i < slugs.length; i++) {
+      const batch = proxyResults[i];
+      slugBreakdown[`proxy:${slugs[i]}`] = batch.length;
+      console.log(`[polymarket] proxy  slug="${slugs[i]}" → ${batch.length} markets`);
+      raw.push(...batch);
+    }
+  }
+
+  // ── Pass 3: no-filter fallback if still empty ─────────────────────────────
+  if (raw.length === 0) {
+    console.log("[polymarket] slug fetch returned 0 — trying unfiltered endpoint");
+    raw = await fetchNoFilter(false);
+    if (raw.length === 0) {
+      raw = await fetchNoFilter(true);
+      usingProxy = true;
+    }
+    slugBreakdown["__unfiltered"] = raw.length;
+    console.log(`[polymarket] unfiltered → ${raw.length} markets`);
+  }
+
+  storeDiag("rawTotal", raw.length);
+  console.log(`[polymarket] total raw: ${raw.length}`);
+
+  // Sample outcomes for diagnostics
+  const sampleOutcomes = raw
+    .slice(0, 10)
+    .map((m: any) => {
+      const outs = (m.tokens ?? []).map((t: any) => t.outcome ?? "?").join(" / ");
+      return `"${(m.question ?? "").slice(0, 60)}…" → [${outs}]`;
+    });
+
+  // ── Filter & deduplicate ──────────────────────────────────────────────────
   const seen = new Set<string>();
   const results: UpDownMarket[] = [];
+
   for (const m of raw) {
-    if (!m.conditionId || seen.has(m.conditionId)) continue;
-    seen.add(m.conditionId);
-    const norm = normalizeOne(m);
+    const id = m.conditionId ?? m.condition_id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const norm = normaliseMarket(m);
     if (norm) results.push(norm);
   }
+
+  storeDiag("filteredTotal", results.length);
+  console.log(`[polymarket] after directional filter: ${results.length}`);
+
+  lastDiagnostics = {
+    rawTotal: raw.length,
+    filteredTotal: results.length,
+    usingProxy,
+    slugBreakdown,
+    sampleOutcomes,
+  };
 
   return results.sort((a, b) => b.volume24h - a.volume24h);
 }
