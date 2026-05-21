@@ -2,28 +2,59 @@ import type { GammaMarket, UpDownMarket, MarketCategory, MarketPeriod } from "./
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
-// Only match genuine directional outcomes — "Yes"/"No" are deliberately excluded
-// because they belong to generic prediction markets, not price-direction markets.
-const UP_PATTERNS = /^(up|higher|above)$/i;
-const DOWN_PATTERNS = /^(down|lower|below)$/i;
+// ── Outcome-token patterns ────────────────────────────────────────────────────
+// Strict directional tokens (never include Yes/No – those are handled separately).
+const STRICT_UP = /^(up|higher|above)$/i;
+const STRICT_DOWN = /^(down|lower|below)$/i;
 
-// Keywords that must appear somewhere in the question/description for the market
-// to qualify as a price-direction market (candle, pump/dump, price move, etc.).
-const PRICE_DIRECTION_RE =
-  /\b(up|down|higher|lower|candle|pump|dump|bull|bear|price|btc|eth|sol|crypto|forex|gold|oil|spx|nasdaq)\b/i;
+// ── Question-text patterns for Yes/No markets ─────────────────────────────────
+// A Yes/No market qualifies when the question contains ALL THREE:
+//   1. a direction word  ("up", "down", "higher", "lower", "pump", "bull", …)
+//   2. a timeframe word  ("5 minutes", "1 hour", "daily", "5m", "candle", …)
+//   3. a price asset     ("BTC", "ETH", "gold", "crypto", "nasdaq", …)
+const DIRECTION_RE =
+  /\b(up|down|higher|lower|rise|rises|fall|falls|pump|dump|bull(ish)?|bear(ish)?)\b/i;
+const TIMEFRAME_RE =
+  /\b(\d+[\s-]?min(ute)?s?|\d+[\s-]?h(our)?s?|\d+[\s-]?day|today|daily|tonight|weekly|candle|5m|15m|1h|6h|1d|1w)\b/i;
+const ASSET_RE =
+  /\b(btc|eth|sol|xrp|ada|doge|link|avax|matic|dot|uni|atom|near|ftm|algo|xlm|vet|trx|bitcoin|ethereum|solana|crypto|gold|silver|oil|crude|spx|s&p|nasdaq|nasdaq100|forex|eur|gbp|jpy|cad)\b/i;
 
 function isUpDownMarket(market: GammaMarket): boolean {
   if (!market.tokens || market.tokens.length !== 2) return false;
   const outcomes = market.tokens.map((t) => t.outcome.trim());
-  if (
-    !outcomes.some((o) => UP_PATTERNS.test(o)) ||
-    !outcomes.some((o) => DOWN_PATTERNS.test(o))
-  ) {
-    return false;
+
+  // Case 1 – explicit directional tokens: "Up"/"Down", "Higher"/"Lower", "Above"/"Below"
+  if (outcomes.some((o) => STRICT_UP.test(o)) && outcomes.some((o) => STRICT_DOWN.test(o))) {
+    return true;
   }
-  // Secondary guard: the question must be about price / direction, not a generic topic.
-  const text = (market.question ?? "") + " " + (market.description ?? "");
-  return PRICE_DIRECTION_RE.test(text);
+
+  // Case 2 – Yes/No tokens where the question is about price direction + timeframe + asset
+  const hasYes = outcomes.some((o) => /^yes$/i.test(o));
+  const hasNo = outcomes.some((o) => /^no$/i.test(o));
+  if (hasYes && hasNo) {
+    const text = (market.question ?? "") + " " + (market.description ?? "");
+    return DIRECTION_RE.test(text) && TIMEFRAME_RE.test(text) && ASSET_RE.test(text);
+  }
+
+  return false;
+}
+
+function getDirectionalTokens(
+  market: GammaMarket,
+): { upToken: typeof market.tokens[0]; downToken: typeof market.tokens[0] } | null {
+  const tokens = market.tokens.map((t) => ({ ...t, outcome: t.outcome.trim() }));
+
+  // Prefer explicit directional tokens
+  const upToken = tokens.find((t) => STRICT_UP.test(t.outcome));
+  const downToken = tokens.find((t) => STRICT_DOWN.test(t.outcome));
+  if (upToken && downToken) return { upToken, downToken };
+
+  // Fall back: Yes → Up, No → Down (Polymarket always frames as "will it go UP?")
+  const yesToken = tokens.find((t) => /^yes$/i.test(t.outcome));
+  const noToken = tokens.find((t) => /^no$/i.test(t.outcome));
+  if (yesToken && noToken) return { upToken: yesToken, downToken: noToken };
+
+  return null;
 }
 
 function parseAsset(question: string): string {
@@ -109,9 +140,9 @@ function parsePeriod(
 function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownMarket | null {
   if (!isUpDownMarket(market)) return null;
 
-  const upToken = market.tokens.find((t) => UP_PATTERNS.test(t.outcome.trim()));
-  const downToken = market.tokens.find((t) => DOWN_PATTERNS.test(t.outcome.trim()));
-  if (!upToken || !downToken) return null;
+  const pair = getDirectionalTokens(market);
+  if (!pair) return null;
+  const { upToken, downToken } = pair;
 
   let outcomePrices: string[] = [];
   try {
