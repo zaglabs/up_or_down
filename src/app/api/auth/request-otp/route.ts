@@ -11,12 +11,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Email required" }, { status: 400 });
     }
 
-    const user = await db.user.findUnique({ where: { email } });
+    let user = await db.user.findUnique({ where: { email } });
     if (!user) {
-      return NextResponse.json({ error: "No account found for this email" }, { status: 404 });
+      await db.user.create({ data: { email, role: "VIEWER", status: "PENDING" } });
+      return NextResponse.json({ pending: true }, { status: 202 });
     }
     if (user.status === "PENDING") {
-      return NextResponse.json({ error: "Your account is pending approval. You'll be notified once an admin approves your request." }, { status: 403 });
+      return NextResponse.json({ pending: true }, { status: 202 });
     }
     if (user.status === "DISABLED") {
       return NextResponse.json({ error: "Your account has been disabled. Contact the admin." }, { status: 403 });

@@ -10,7 +10,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/";
 
-  const [step, setStep] = useState<"email" | "otp">("email");
+  const [step, setStep] = useState<"email" | "otp" | "pending">("email");
   const [email, setEmail] = useState("");
   const [mockCode, setMockCode] = useState("");
   const [code, setCode] = useState("");
@@ -28,8 +28,10 @@ function LoginForm() {
         body: JSON.stringify({ email }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "No account found for this email");
+      if (res.status === 202 && data.pending) {
+        setStep("pending");
+      } else if (!res.ok) {
+        setError(data.error ?? "Something went wrong. Please try again.");
       } else {
         setMockCode(data.code);
         setStep("otp");
@@ -62,12 +64,14 @@ function LoginForm() {
           <span className="text-xl font-bold text-zinc-100">UpOrDown</span>
         </div>
         <h1 className="text-2xl font-bold text-zinc-100">
-          {step === "email" ? "Sign in" : "Check your email"}
+          {step === "email" ? "Sign in" : step === "otp" ? "Check your email" : "Request received"}
         </h1>
         <p className="mt-2 text-sm text-zinc-500">
           {step === "email"
             ? "Enter your email to receive a one-time code"
-            : `We sent a code to ${email}`}
+            : step === "otp"
+            ? `We sent a code to ${email}`
+            : "An admin will review and approve your account"}
         </p>
       </div>
 
@@ -97,6 +101,24 @@ function LoginForm() {
             </Link>
           </p>
         </form>
+      ) : step === "pending" ? (
+        <div className="space-y-4 text-center">
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+            <p className="text-4xl mb-3">⏳</p>
+            <p className="text-sm text-zinc-300 font-medium">Access request submitted</p>
+            <p className="mt-2 text-xs text-zinc-500">
+              We&apos;ve noted your request for <span className="text-zinc-400">{email}</span>.
+              You&apos;ll be able to sign in once an admin approves your account.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => { setStep("email"); setEmail(""); setError(""); }}
+            className="w-full text-xs text-zinc-600 hover:text-zinc-400 transition-colors py-1"
+          >
+            ← Use a different email
+          </button>
+        </div>
       ) : (
         <form onSubmit={verify} className="space-y-4">
           {/* Mock: shows code on screen until real email delivery is wired up */}
