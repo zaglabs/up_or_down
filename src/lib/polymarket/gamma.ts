@@ -91,13 +91,6 @@ function parsePeriod(
   return "1d";
 }
 
-function inferCategory(market: GammaMarket, fallback: MarketCategory): MarketCategory {
-  const cat = (market.category ?? "").toLowerCase();
-  if (/crypto|bitcoin|ethereum|defi|nft/.test(cat)) return "crypto";
-  if (cat) return "finance";
-  return fallback;
-}
-
 function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownMarket | null {
   if (!isUpDownMarket(market)) return null;
 
@@ -132,9 +125,17 @@ function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownM
     volume24h: parseFloat(market.volume || "0"),
     liquidity: parseFloat(market.liquidity || "0"),
     negRisk: market.negRisk ?? false,
-    category: inferCategory(market, category),
+    category,
     slug: market.slug,
   };
+}
+
+function safeNormalize(market: GammaMarket, category: MarketCategory): UpDownMarket | null {
+  try {
+    return normalizeMarket(market, category);
+  } catch {
+    return null;
+  }
 }
 
 async function fetchGammaMarkets(tagSlug: string): Promise<GammaMarket[]> {
@@ -196,16 +197,23 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
   const tagResults = await Promise.allSettled(
     tagSlugs.map(({ slug, cat }) =>
       fetchGammaMarkets(slug).then((markets) =>
-        markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
+        markets.map((m) => safeNormalize(m, cat)).filter((m): m is UpDownMarket => m !== null)
       )
     )
   );
 
   // "Ending soon" fetch — catches 5M/15M/1H markets regardless of tag.
   // 2-hour window captures all short-duration resolutions active right now.
+  // Category is inferred from the API's own category string (safe String() coercion).
   const shortTermResult = await fetchGammaMarketsEndingSoon(2).then((markets) =>
     markets
-      .map((m) => normalizeMarket(m, inferCategory(m, "crypto")))
+      .map((m) => {
+        const rawCat = String(m.category ?? "").toLowerCase();
+        const cat: MarketCategory = /crypto|bitcoin|ethereum|defi|nft/.test(rawCat)
+          ? "crypto"
+          : "finance";
+        return safeNormalize(m, cat);
+      })
       .filter((m): m is UpDownMarket => m !== null)
   );
 
