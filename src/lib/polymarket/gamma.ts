@@ -2,13 +2,28 @@ import type { GammaMarket, UpDownMarket, MarketCategory, MarketPeriod } from "./
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
-const UP_PATTERNS = /^(up|higher|above|yes)$/i;
-const DOWN_PATTERNS = /^(down|lower|below|no)$/i;
+// Only match genuine directional outcomes — "Yes"/"No" are deliberately excluded
+// because they belong to generic prediction markets, not price-direction markets.
+const UP_PATTERNS = /^(up|higher|above)$/i;
+const DOWN_PATTERNS = /^(down|lower|below)$/i;
+
+// Keywords that must appear somewhere in the question/description for the market
+// to qualify as a price-direction market (candle, pump/dump, price move, etc.).
+const PRICE_DIRECTION_RE =
+  /\b(up|down|higher|lower|candle|pump|dump|bull|bear|price|btc|eth|sol|crypto|forex|gold|oil|spx|nasdaq)\b/i;
 
 function isUpDownMarket(market: GammaMarket): boolean {
   if (!market.tokens || market.tokens.length !== 2) return false;
   const outcomes = market.tokens.map((t) => t.outcome.trim());
-  return outcomes.some((o) => UP_PATTERNS.test(o)) && outcomes.some((o) => DOWN_PATTERNS.test(o));
+  if (
+    !outcomes.some((o) => UP_PATTERNS.test(o)) ||
+    !outcomes.some((o) => DOWN_PATTERNS.test(o))
+  ) {
+    return false;
+  }
+  // Secondary guard: the question must be about price / direction, not a generic topic.
+  const text = (market.question ?? "") + " " + (market.description ?? "");
+  return PRICE_DIRECTION_RE.test(text);
 }
 
 function parseAsset(question: string): string {
@@ -184,14 +199,28 @@ async function fetchGammaMarketsEndingSoon(windowHours: number): Promise<GammaMa
   }
 }
 
+// Tag slugs known (or likely) to contain Up/Down price-direction markets on Polymarket.
+// "crypto" and "cryptocurrency" cover BTC/ETH/SOL candle markets.
+// "crypto-prices" is Polymarket's dedicated price-prediction tag.
+// "financials" / "economics" / "forex" cover non-crypto directional markets.
+const TAG_SLUGS_CRYPTO: Array<{ slug: string; cat: MarketCategory }> = [
+  { slug: "crypto", cat: "crypto" },
+  { slug: "cryptocurrency", cat: "crypto" },
+  { slug: "crypto-prices", cat: "crypto" },
+];
+const TAG_SLUGS_FINANCE: Array<{ slug: string; cat: MarketCategory }> = [
+  { slug: "financials", cat: "finance" },
+  { slug: "economics", cat: "finance" },
+  { slug: "forex", cat: "finance" },
+];
+
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  const tagSlugs: Array<{ slug: string; cat: MarketCategory }> = category
-    ? [{ slug: category === "crypto" ? "crypto" : "financials", cat: category }]
-    : [
-        { slug: "crypto", cat: "crypto" },
-        { slug: "financials", cat: "finance" },
-        { slug: "economics", cat: "finance" },
-      ];
+  const tagSlugs: Array<{ slug: string; cat: MarketCategory }> =
+    category === "crypto"
+      ? TAG_SLUGS_CRYPTO
+      : category === "finance"
+      ? TAG_SLUGS_FINANCE
+      : [...TAG_SLUGS_CRYPTO, ...TAG_SLUGS_FINANCE];
 
   // Tag-based fetches (covers 6H/1D/1W markets well)
   const tagResults = await Promise.allSettled(
