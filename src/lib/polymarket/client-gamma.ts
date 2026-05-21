@@ -46,17 +46,22 @@ function parsePeriod(q: string, end: string, start: string): MarketPeriod {
   const ql = q.toLowerCase();
   if (ql.match(/\b5[\s-]?min/))  return "5m";
   if (ql.match(/\b15[\s-]?min/)) return "15m";
+  if (ql.match(/\b30[\s-]?min/)) return "1h";  // treat 30m as 1h bucket
   if (ql.match(/\b1[\s-]?h(our)?r?\b/) || ql.includes("hourly")) return "1h";
+  if (ql.match(/\b[2-5][\s-]?h(our)?r?\b/)) return "6h";
   if (ql.match(/\b6[\s-]?h(our)?r?\b/)) return "6h";
   if (ql.match(/\b(daily|today|24[\s-]?h)/)) return "1d";
   if (ql.match(/\b(weekly|this week|7[\s-]?day)/)) return "1w";
   try {
     const ms = new Date(end).getTime() - new Date(start).getTime();
-    if (ms <= 10 * 60_000)    return "5m";
-    if (ms <= 20 * 60_000)    return "15m";
-    if (ms <= 2 * 3_600_000)  return "1h";
-    if (ms <= 12 * 3_600_000) return "6h";
-    if (ms <= 2 * 86_400_000) return "1d";
+    if (ms > 0) {
+      if (ms <=  8 * 60_000)    return "5m";
+      if (ms <= 20 * 60_000)    return "15m";
+      if (ms <=  2 * 3_600_000) return "1h";
+      if (ms <= 12 * 3_600_000) return "6h";
+      if (ms <=  2 * 86_400_000) return "1d";
+      return "1w";
+    }
   } catch {}
   return "1d";
 }
@@ -193,7 +198,25 @@ async function fetchSlugPaginated(slug: string, pages: number, useProxy = false)
     const url = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
     const batch = (await tryFetch(url)) ?? [];
     results.push(...batch);
-    if (batch.length < 100) break; // reached last page
+    if (batch.length < 100) break;
+  }
+  return results;
+}
+
+// Fetch markets sorted by soonest end date — surfaces 5m/15m/1h markets
+async function fetchBySoonestExpiry(pages: number, useProxy = false): Promise<any[]> {
+  const results: any[] = [];
+  for (let page = 0; page < pages; page++) {
+    const target = [
+      `${GAMMA_BASE}/markets`,
+      `?active=true&closed=false`,
+      `&limit=100&offset=${page * 100}`,
+      `&order=endDateIso&ascending=true`,
+    ].join("");
+    const url = useProxy ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
+    const batch = (await tryFetch(url)) ?? [];
+    results.push(...batch);
+    if (batch.length < 100) break;
   }
   return results;
 }
@@ -239,13 +262,16 @@ export function getLastDiagnostics(): FetchDiagnostics | null {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-// Key slugs only — fewer slugs, more pages each = deeper coverage per category
+// Key slugs — 3 pages each (up to 300 per slug)
 const SLUGS_CRYPTO  = ["crypto", "bitcoin", "ethereum", "solana"];
 const SLUGS_FINANCE = ["financials", "economics", "commodities"];
 const SLUGS_ALL     = [...SLUGS_CRYPTO, ...SLUGS_FINANCE];
-
-// Pages per slug: 3 pages × 100 = up to 300 markets per slug → ~2100 unique raw markets
 const PAGES_PER_SLUG = 3;
+
+// Sort priority: shorter durations appear first in the default view
+const PERIOD_PRIORITY: Record<string, number> = {
+  "5m": 0, "15m": 1, "1h": 2, "6h": 3, "1d": 4, "1w": 5,
+};
 
 export async function fetchMarketsClient(category?: MarketCategory): Promise<UpDownMarket[]> {
   const slugs =
@@ -257,58 +283,60 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
   let usingProxy = false;
   const slugBreakdown: Record<string, number> = {};
 
-  // ── Pass 1: paginated slug fetch (direct) ─────────────────────────────────
-  const directResults = await Promise.all(
-    slugs.map((s) => fetchSlugPaginated(s, PAGES_PER_SLUG, false))
-  );
-  for (let i = 0; i < slugs.length; i++) {
-    const batch = directResults[i];
-    slugBreakdown[slugs[i]] = batch.length;
-    console.log(`[polymarket] direct slug="${slugs[i]}" → ${batch.length} markets`);
-    raw.push(...batch);
+  async function runDirectPasses() {
+    // Tag-slug pages + soonest-expiry pages + volume pages — all in parallel
+    const [slugResults, expiryResults, volResults] = await Promise.all([
+      Promise.all(slugs.map((s) => fetchSlugPaginated(s, PAGES_PER_SLUG, false))),
+      fetchBySoonestExpiry(5, false),   // 500 markets sorted by nearest end date
+      fetchByVolume(3, false),           // 300 top-volume markets
+    ]);
+
+    for (let i = 0; i < slugs.length; i++) {
+      slugBreakdown[slugs[i]] = slugResults[i].length;
+      console.log(`[polymarket] slug="${slugs[i]}" → ${slugResults[i].length}`);
+      raw.push(...slugResults[i]);
+    }
+    slugBreakdown["__expiry"] = expiryResults.length;
+    slugBreakdown["__volume"] = volResults.length;
+    console.log(`[polymarket] expiry-sorted → ${expiryResults.length}, volume-sorted → ${volResults.length}`);
+    raw.push(...expiryResults, ...volResults);
   }
 
-  // ── Pass 2: top markets by volume (direct) ────────────────────────────────
-  // Fetch 3 pages of top-volume markets; these are most likely to be financial
-  const volResults = await fetchByVolume(3, false);
-  slugBreakdown["__volume"] = volResults.length;
-  console.log(`[polymarket] direct volume-sorted → ${volResults.length} markets`);
-  raw.push(...volResults);
+  await runDirectPasses();
 
-  // ── Pass 3: CORS proxy fallback if we got nothing ─────────────────────────
+  // CORS proxy fallback
   if (raw.length === 0) {
     console.log("[polymarket] direct returned 0 — trying CORS proxy");
     usingProxy = true;
-    const proxyResults = await Promise.all(
-      slugs.map((s) => fetchSlugPaginated(s, PAGES_PER_SLUG, true))
-    );
+
+    const [slugResults, expiryResults, volResults] = await Promise.all([
+      Promise.all(slugs.map((s) => fetchSlugPaginated(s, PAGES_PER_SLUG, true))),
+      fetchBySoonestExpiry(5, true),
+      fetchByVolume(3, true),
+    ]);
+
     for (let i = 0; i < slugs.length; i++) {
-      const batch = proxyResults[i];
-      slugBreakdown[`proxy:${slugs[i]}`] = batch.length;
-      raw.push(...batch);
+      slugBreakdown[`proxy:${slugs[i]}`] = slugResults[i].length;
+      raw.push(...slugResults[i]);
     }
-    const proxyVol = await fetchByVolume(3, true);
-    slugBreakdown["proxy:__volume"] = proxyVol.length;
-    raw.push(...proxyVol);
+    raw.push(...expiryResults, ...volResults);
   }
 
   storeDiag("rawTotal", raw.length);
   console.log(`[polymarket] total raw (before dedup): ${raw.length}`);
 
-  // Sample raw market to show actual field names for debugging
   if (raw.length > 0) {
-    const sample = raw[0];
-    console.log("[polymarket] sample market fields:", {
-      conditionId: sample.conditionId,
-      question: (sample.question ?? "").slice(0, 80),
-      outcomes: sample.outcomes,
-      outcomePrices: sample.outcomePrices,
-      tokens: sample.tokens,
-      clobTokenIds: sample.clobTokenIds,
+    const s = raw[0];
+    console.log("[polymarket] sample field check:", {
+      q: (s.question ?? "").slice(0, 80),
+      outcomes: s.outcomes,
+      outcomePrices: s.outcomePrices,
+      clobTokenIds: s.clobTokenIds,
+      endDateIso: s.endDateIso ?? s.endDate,
     });
   }
 
-  // ── Filter & deduplicate ──────────────────────────────────────────────────
+  // ── Deduplicate → normalise ───────────────────────────────────────────────
   const seen = new Set<string>();
   const results: UpDownMarket[] = [];
 
@@ -323,11 +351,11 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
   storeDiag("filteredTotal", results.length);
   console.log(`[polymarket] after directional filter: ${results.length}`);
 
-  // Build diagnostics — show raw outcomes field type for first 10 markets
   const sampleOutcomes = raw.slice(0, 10).map((m: any) => {
-    const rawOut = m.outcomes ?? m.tokens;
-    const outArr = parseArrayField(rawOut ?? []);
-    const outStr = outArr.length ? outArr.join(" / ") : `RAW:${JSON.stringify(rawOut ?? null).slice(0, 40)}`;
+    const outArr = parseArrayField(m.outcomes ?? m.tokens ?? []);
+    const outStr = outArr.length
+      ? outArr.join(" / ")
+      : `RAW:${JSON.stringify(m.outcomes ?? null).slice(0, 40)}`;
     return `"${(m.question ?? "").slice(0, 55)}…" → [${outStr}]`;
   });
 
@@ -339,5 +367,11 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
     sampleOutcomes,
   };
 
-  return results.sort((a, b) => b.volume24h - a.volume24h);
+  // Sort: shortest duration first, then by volume within same period
+  return results.sort((a, b) => {
+    const pa = PERIOD_PRIORITY[a.period] ?? 99;
+    const pb = PERIOD_PRIORITY[b.period] ?? 99;
+    if (pa !== pb) return pa - pb;
+    return b.volume24h - a.volume24h;
+  });
 }

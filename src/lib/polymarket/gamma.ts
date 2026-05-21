@@ -90,17 +90,22 @@ function parsePeriod(question: string, endDate: string, startDate: string): Mark
   const q = question.toLowerCase();
   if (q.match(/\b5[\s-]?min/))  return "5m";
   if (q.match(/\b15[\s-]?min/)) return "15m";
+  if (q.match(/\b30[\s-]?min/)) return "1h";
   if (q.match(/\b1[\s-]?h(our)?r?\b/) || q.includes("hourly")) return "1h";
+  if (q.match(/\b[2-5][\s-]?h(our)?r?\b/)) return "6h";
   if (q.match(/\b6[\s-]?h(our)?r?\b/)) return "6h";
   if (q.match(/\b(daily|today|24[\s-]?h|end of (day|today))/)) return "1d";
   if (q.match(/\b(weekly|this week|7[\s-]?day)/)) return "1w";
   try {
     const diff = new Date(endDate).getTime() - new Date(startDate).getTime();
-    if (diff <= 10 * 60_000)    return "5m";
-    if (diff <= 20 * 60_000)    return "15m";
-    if (diff <= 2 * 3_600_000)  return "1h";
-    if (diff <= 12 * 3_600_000) return "6h";
-    if (diff <= 2 * 86_400_000) return "1d";
+    if (diff > 0) {
+      if (diff <=  8 * 60_000)    return "5m";
+      if (diff <= 20 * 60_000)    return "15m";
+      if (diff <=  2 * 3_600_000) return "1h";
+      if (diff <= 12 * 3_600_000) return "6h";
+      if (diff <=  2 * 86_400_000) return "1d";
+      return "1w";
+    }
   } catch {}
   return "1d";
 }
