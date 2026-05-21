@@ -21,32 +21,81 @@ function parseAsset(question: string): string {
     const m = question.match(p);
     if (m) return m[1].toUpperCase();
   }
-  // Extract first capitalized word as asset
   const firstCap = question.match(/\b([A-Z]{2,6})\b/);
   return firstCap ? firstCap[1] : "ASSET";
 }
 
-function parsePeriod(question: string, endDate: string, startDate: string): MarketPeriod {
-  const q = question.toLowerCase();
-  if (q.includes("5 min") || q.includes("5min") || q.includes("5-min")) return "5m";
-  if (q.includes("15 min") || q.includes("15min") || q.includes("15-min")) return "15m";
-  if (q.includes("1 hour") || q.includes("1hour") || q.includes("hourly") || q.includes("1h")) return "1h";
-  if (q.includes("6 hour") || q.includes("6h")) return "6h";
-  if (q.includes("daily") || q.includes("1 day") || q.includes("today") || q.includes("24h")) return "1d";
-  if (q.includes("weekly") || q.includes("1 week") || q.includes("7 day")) return "1w";
+function parsePeriod(
+  question: string,
+  endDate: string,
+  startDate: string,
+  description?: string,
+  tags?: string[],
+): MarketPeriod {
+  // Combine question + description for richer text matching
+  const q = (question + " " + (description ?? "")).toLowerCase();
 
-  // Estimate from date range
+  // 5-minute: "5 min", "5min", "5-min", "5 minute", standalone "5m"
+  if (/\b5[\s-]?min(ute)?s?\b/.test(q) || /\b5m\b/.test(q)) return "5m";
+
+  // 15-minute: "15 min", "15min", "15-min", "15 minute", standalone "15m"
+  if (/\b15[\s-]?min(ute)?s?\b/.test(q) || /\b15m\b/.test(q)) return "15m";
+
+  // 1-hour: "1 hour", "1h", "hourly", "60 min"
+  if (/\b(1[\s-]?h(our)?|hourly|60[\s-]?min(ute)?s?)\b/.test(q)) return "1h";
+
+  // 6-hour
+  if (/\b6[\s-]?h(our)?s?\b/.test(q)) return "6h";
+
+  // Daily
+  if (/\b(daily|today|24[\s-]?h(our)?s?)\b/.test(q) || /\b1[\s-]?day\b/.test(q)) return "1d";
+
+  // Weekly
+  if (/\b(weekly)\b/.test(q) || /\b1[\s-]?week\b/.test(q) || /\b7[\s-]?days?\b/.test(q)) return "1w";
+
+  // Check market tags for duration hints (e.g. tag slug contains "5m", "1h", etc.)
+  if (tags?.length) {
+    const tagStr = tags.join(" ").toLowerCase();
+    if (/\b5m\b/.test(tagStr) || tagStr.includes("5-min") || tagStr.includes("5min")) return "5m";
+    if (/\b15m\b/.test(tagStr) || tagStr.includes("15-min") || tagStr.includes("15min")) return "15m";
+    if (/\b1h\b/.test(tagStr) || tagStr.includes("1-hour") || tagStr.includes("hourly")) return "1h";
+    if (/\b6h\b/.test(tagStr)) return "6h";
+  }
+
+  // Date-based fallback — try total market duration first (good for one-off short markets)
   try {
     const start = new Date(startDate).getTime();
     const end = new Date(endDate).getTime();
-    const diffMs = end - start;
-    if (diffMs <= 10 * 60 * 1000) return "5m";
-    if (diffMs <= 20 * 60 * 1000) return "15m";
-    if (diffMs <= 2 * 60 * 60 * 1000) return "1h";
-    if (diffMs <= 12 * 60 * 60 * 1000) return "6h";
-    if (diffMs <= 2 * 24 * 60 * 60 * 1000) return "1d";
+    const now = Date.now();
+    const totalMs = end - start;
+
+    if (!isNaN(totalMs) && totalMs > 0) {
+      if (totalMs <= 10 * 60 * 1000) return "5m";
+      if (totalMs <= 20 * 60 * 1000) return "15m";
+      if (totalMs <= 2 * 60 * 60 * 1000) return "1h";
+      if (totalMs <= 12 * 60 * 60 * 1000) return "6h";
+      if (totalMs <= 2 * 24 * 60 * 60 * 1000) return "1d";
+    }
+
+    // For recurring/rolling markets startDate is the series start (weeks ago),
+    // so fall back to time-remaining-until-expiry as a proxy for the resolution window.
+    const remaining = end - now;
+    if (!isNaN(remaining) && remaining > 0) {
+      if (remaining <= 10 * 60 * 1000) return "5m";
+      if (remaining <= 20 * 60 * 1000) return "15m";
+      if (remaining <= 2 * 60 * 60 * 1000) return "1h";
+      if (remaining <= 12 * 60 * 60 * 1000) return "6h";
+      if (remaining <= 2 * 24 * 60 * 60 * 1000) return "1d";
+    }
   } catch {}
   return "1d";
+}
+
+function inferCategory(market: GammaMarket, fallback: MarketCategory): MarketCategory {
+  const cat = (market.category ?? "").toLowerCase();
+  if (/crypto|bitcoin|ethereum|defi|nft/.test(cat)) return "crypto";
+  if (cat) return "finance";
+  return fallback;
 }
 
 function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownMarket | null {
@@ -68,7 +117,13 @@ function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownM
     conditionId: market.conditionId,
     question: market.question,
     asset: parseAsset(market.question),
-    period: parsePeriod(market.question, market.endDateIso || market.endDate, market.startDate),
+    period: parsePeriod(
+      market.question,
+      market.endDateIso || market.endDate,
+      market.startDate,
+      market.description,
+      market.tags,
+    ),
     endDateIso: market.endDateIso || market.endDate,
     upTokenId: upToken.tokenId,
     downTokenId: downToken.tokenId,
@@ -77,7 +132,7 @@ function normalizeMarket(market: GammaMarket, category: MarketCategory): UpDownM
     volume24h: parseFloat(market.volume || "0"),
     liquidity: parseFloat(market.liquidity || "0"),
     negRisk: market.negRisk ?? false,
-    category,
+    category: inferCategory(market, category),
     slug: market.slug,
   };
 }
@@ -87,7 +142,7 @@ async function fetchGammaMarkets(tagSlug: string): Promise<GammaMarket[]> {
   url.searchParams.set("tag_slug", tagSlug);
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
-  url.searchParams.set("limit", "100");
+  url.searchParams.set("limit", "200");
 
   const res = await fetch(url.toString(), {
     headers: { "Accept": "application/json" },
@@ -103,8 +158,33 @@ async function fetchGammaMarkets(tagSlug: string): Promise<GammaMarket[]> {
   return Array.isArray(data) ? data : (data.markets ?? []);
 }
 
+// Fetch markets expiring within the next `windowHours` hours — this reliably
+// surfaces short-duration markets regardless of their tag classification.
+async function fetchGammaMarketsEndingSoon(windowHours: number): Promise<GammaMarket[]> {
+  const url = new URL(`${GAMMA_BASE}/markets`);
+  const endMax = new Date(Date.now() + windowHours * 60 * 60 * 1000).toISOString();
+  url.searchParams.set("active", "true");
+  url.searchParams.set("closed", "false");
+  url.searchParams.set("end_date_max", endMax);
+  url.searchParams.set("order", "endDate");
+  url.searchParams.set("ascending", "true");
+  url.searchParams.set("limit", "200");
+
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { "Accept": "application/json" },
+      next: { revalidate: 30 },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.markets ?? []);
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
-  const categories: Array<{ slug: string; cat: MarketCategory }> = category
+  const tagSlugs: Array<{ slug: string; cat: MarketCategory }> = category
     ? [{ slug: category === "crypto" ? "crypto" : "financials", cat: category }]
     : [
         { slug: "crypto", cat: "crypto" },
@@ -112,18 +192,28 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
         { slug: "economics", cat: "finance" },
       ];
 
-  const results = await Promise.allSettled(
-    categories.map(({ slug, cat }) =>
+  // Tag-based fetches (covers 6H/1D/1W markets well)
+  const tagResults = await Promise.allSettled(
+    tagSlugs.map(({ slug, cat }) =>
       fetchGammaMarkets(slug).then((markets) =>
         markets.map((m) => normalizeMarket(m, cat)).filter((m): m is UpDownMarket => m !== null)
       )
     )
   );
 
+  // "Ending soon" fetch — catches 5M/15M/1H markets regardless of tag.
+  // 2-hour window captures all short-duration resolutions active right now.
+  const shortTermResult = await fetchGammaMarketsEndingSoon(2).then((markets) =>
+    markets
+      .map((m) => normalizeMarket(m, inferCategory(m, "crypto")))
+      .filter((m): m is UpDownMarket => m !== null)
+  );
+
   const all: UpDownMarket[] = [];
-  for (const r of results) {
+  for (const r of tagResults) {
     if (r.status === "fulfilled") all.push(...r.value);
   }
+  all.push(...shortTermResult);
 
   // Deduplicate by conditionId
   const seen = new Set<string>();
