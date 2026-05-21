@@ -237,19 +237,56 @@ async function fetchGammaMarketsEndingSoon(windowHours: number): Promise<GammaMa
 }
 
 // Tag slugs known (or likely) to contain Up/Down price-direction markets on Polymarket.
-// "crypto" and "cryptocurrency" cover BTC/ETH/SOL candle markets.
-// "crypto-prices" is Polymarket's dedicated price-prediction tag.
-// "financials" / "economics" / "forex" cover non-crypto directional markets.
 const TAG_SLUGS_CRYPTO: Array<{ slug: string; cat: MarketCategory }> = [
   { slug: "crypto", cat: "crypto" },
   { slug: "cryptocurrency", cat: "crypto" },
   { slug: "crypto-prices", cat: "crypto" },
+  { slug: "bitcoin", cat: "crypto" },
+  { slug: "ethereum", cat: "crypto" },
+  { slug: "solana", cat: "crypto" },
+  { slug: "price-prediction", cat: "crypto" },
+  { slug: "crypto-candles", cat: "crypto" },
 ];
 const TAG_SLUGS_FINANCE: Array<{ slug: string; cat: MarketCategory }> = [
   { slug: "financials", cat: "finance" },
   { slug: "economics", cat: "finance" },
   { slug: "forex", cat: "finance" },
+  { slug: "stocks", cat: "finance" },
+  { slug: "commodities", cat: "finance" },
+  { slug: "finance", cat: "finance" },
 ];
+
+// Fetch top active markets by volume — no tag filter, catches directional markets
+// regardless of how Polymarket has categorised them.
+async function fetchGammaMarketsTopVolume(): Promise<GammaMarket[]> {
+  const url = new URL(`${GAMMA_BASE}/markets`);
+  url.searchParams.set("active", "true");
+  url.searchParams.set("closed", "false");
+  url.searchParams.set("order", "volume24hr");
+  url.searchParams.set("ascending", "false");
+  url.searchParams.set("limit", "200");
+
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { "Accept": "application/json" },
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.markets ?? []);
+  } catch {
+    return [];
+  }
+}
+
+function inferCategory(market: GammaMarket): MarketCategory {
+  const text = (
+    String(market.category ?? "") + " " +
+    (market.question ?? "") + " " +
+    (market.tags ?? []).join(" ")
+  ).toLowerCase();
+  return /crypto|bitcoin|ethereum|solana|btc|eth|sol|defi|nft/.test(text) ? "crypto" : "finance";
+}
 
 export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpDownMarket[]> {
   const tagSlugs: Array<{ slug: string; cat: MarketCategory }> =
@@ -259,34 +296,34 @@ export async function fetchUpDownMarkets(category?: MarketCategory): Promise<UpD
       ? TAG_SLUGS_FINANCE
       : [...TAG_SLUGS_CRYPTO, ...TAG_SLUGS_FINANCE];
 
-  // Tag-based fetches (covers 6H/1D/1W markets well)
-  const tagResults = await Promise.allSettled(
-    tagSlugs.map(({ slug, cat }) =>
-      fetchGammaMarkets(slug).then((markets) =>
-        markets.map((m) => safeNormalize(m, cat)).filter((m): m is UpDownMarket => m !== null)
+  // Tag-based fetches + top-volume broad fetch run in parallel
+  const [tagResults, topVolumeRaw, shortTermRaw] = await Promise.all([
+    Promise.allSettled(
+      tagSlugs.map(({ slug, cat }) =>
+        fetchGammaMarkets(slug).then((markets) =>
+          markets.map((m) => safeNormalize(m, cat)).filter((m): m is UpDownMarket => m !== null)
+        )
       )
-    )
-  );
+    ),
+    // Broad top-volume fetch — no tag required
+    fetchGammaMarketsTopVolume(),
+    // "Ending soon" — catches 5M/15M/1H regardless of tag; 6-hour window
+    fetchGammaMarketsEndingSoon(6),
+  ]);
 
-  // "Ending soon" fetch — catches 5M/15M/1H markets regardless of tag.
-  // 2-hour window captures all short-duration resolutions active right now.
-  // Category is inferred from the API's own category string (safe String() coercion).
-  const shortTermResult = await fetchGammaMarketsEndingSoon(2).then((markets) =>
-    markets
-      .map((m) => {
-        const rawCat = String(m.category ?? "").toLowerCase();
-        const cat: MarketCategory = /crypto|bitcoin|ethereum|defi|nft/.test(rawCat)
-          ? "crypto"
-          : "finance";
-        return safeNormalize(m, cat);
-      })
-      .filter((m): m is UpDownMarket => m !== null)
-  );
+  const shortTermResult = shortTermRaw
+    .map((m) => safeNormalize(m, inferCategory(m)))
+    .filter((m): m is UpDownMarket => m !== null);
+
+  const topVolumeResult = topVolumeRaw
+    .map((m) => safeNormalize(m, inferCategory(m)))
+    .filter((m): m is UpDownMarket => m !== null);
 
   const all: UpDownMarket[] = [];
   for (const r of tagResults) {
     if (r.status === "fulfilled") all.push(...r.value);
   }
+  all.push(...topVolumeResult);
   all.push(...shortTermResult);
 
   // Deduplicate by conditionId
