@@ -46,7 +46,7 @@ export function CreateUserForm() {
           value={role} onChange={(e) => setRole(e.target.value as typeof role)}
           className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
         >
-          <option value="VIEWER">Viewer</option>
+          <option value="VIEWER">User</option>
           <option value="TRADER">Trader</option>
           <option value="ADMIN">Admin</option>
         </select>

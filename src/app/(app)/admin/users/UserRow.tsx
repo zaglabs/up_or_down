@@ -35,9 +35,15 @@ export function UserRow({ user }: { user: User }) {
       <td className="px-4 py-3 text-zinc-100 font-mono text-xs">{user.email}</td>
       <td className="px-4 py-3 text-zinc-400 text-sm">{user.name ?? "—"}</td>
       <td className="px-4 py-3">
-        <span className={`text-xs font-medium ${ROLE_COLORS[user.role] ?? "text-zinc-400"}`}>
-          {user.role}
-        </span>
+        <select
+          value={user.role}
+          onChange={(e) => patch({ role: e.target.value })}
+          className={`bg-transparent text-xs font-medium cursor-pointer focus:outline-none ${ROLE_COLORS[user.role] ?? "text-zinc-400"}`}
+        >
+          <option value="VIEWER" className="bg-zinc-900 text-zinc-100">User</option>
+          <option value="TRADER" className="bg-zinc-900 text-zinc-100">Trader</option>
+          <option value="ADMIN" className="bg-zinc-900 text-zinc-100">Admin</option>
+        </select>
       </td>
       <td className="px-4 py-3">
         <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[user.status] ?? ""}`}>
