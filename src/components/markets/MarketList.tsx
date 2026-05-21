@@ -4,26 +4,38 @@ import useSWR from "swr";
 import { useState } from "react";
 import { MarketCard } from "./MarketCard";
 import type { UpDownMarket, MarketCategory, MarketPeriod } from "@/lib/polymarket/types";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, AlertCircle } from "lucide-react";
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+async function fetcher(url: string): Promise<UpDownMarket[]> {
+  const res = await fetch(url);
+  const json = await res.json();
+  if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+  if (!Array.isArray(json)) throw new Error("Unexpected API response");
+  return json;
+}
 
 const PERIODS: Array<MarketPeriod | "all"> = ["all", "5m", "15m", "1h", "6h", "1d", "1w"];
 const CATEGORIES: Array<MarketCategory | "all"> = ["all", "crypto", "finance"];
 
 export function MarketList() {
   const [category, setCategory] = useState<MarketCategory | "all">("all");
-  const [period, setPeriod] = useState<MarketPeriod | "all">("all");
-  const [search, setSearch] = useState("");
+  const [period, setPeriod]     = useState<MarketPeriod | "all">("all");
+  const [search, setSearch]     = useState("");
 
   const url = category !== "all" ? `/api/markets?category=${category}` : "/api/markets";
   const { data: markets, isLoading, error, mutate } = useSWR<UpDownMarket[]>(url, fetcher, {
     refreshInterval: 120_000,
+    shouldRetryOnError: false,
   });
 
   const filtered = (markets ?? []).filter((m) => {
     if (period !== "all" && m.period !== period) return false;
-    if (search && !m.question.toLowerCase().includes(search.toLowerCase()) && !m.asset.toLowerCase().includes(search.toLowerCase())) return false;
+    if (
+      search &&
+      !m.question.toLowerCase().includes(search.toLowerCase()) &&
+      !m.asset.toLowerCase().includes(search.toLowerCase())
+    )
+      return false;
     return true;
   });
 
@@ -80,14 +92,15 @@ export function MarketList() {
         </button>
       </div>
 
-      {/* Market count */}
-      {!isLoading && (
+      {/* Status line */}
+      {!isLoading && !error && markets !== undefined && (
         <p className="text-xs text-zinc-500">
-          {filtered.length} market{filtered.length !== 1 ? "s" : ""} found
+          {filtered.length} market{filtered.length !== 1 ? "s" : ""} shown
+          {period !== "all" || search ? ` (${markets.length} total from Polymarket)` : ""}
         </p>
       )}
 
-      {/* States */}
+      {/* Loading skeletons */}
       {isLoading && (
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -96,18 +109,40 @@ export function MarketList() {
         </div>
       )}
 
+      {/* Error */}
       {error && (
-        <div className="rounded-xl border border-red-900 bg-red-950/30 p-4 text-sm text-red-400">
-          Failed to load markets. Check your connection and try again.
+        <div className="rounded-xl border border-red-900 bg-red-950/30 p-4 text-sm text-red-400 flex items-start gap-2">
+          <AlertCircle size={15} className="shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Failed to load markets</p>
+            <p className="text-red-500 mt-0.5">{error?.message ?? "Unknown error"}</p>
+            <p className="text-red-600 text-xs mt-1">
+              Check the server terminal for [gamma] log lines to see what Polymarket returned.
+            </p>
+          </div>
         </div>
       )}
 
-      {!isLoading && !error && filtered.length === 0 && (
-        <div className="rounded-xl border border-zinc-800 p-8 text-center text-zinc-500">
-          No up/down markets found for the selected filters.
+      {/* Empty state */}
+      {!isLoading && !error && markets !== undefined && filtered.length === 0 && (
+        <div className="rounded-xl border border-zinc-800 p-8 text-center space-y-2">
+          <p className="text-zinc-400 font-medium">No directional markets found</p>
+          <p className="text-zinc-600 text-xs max-w-sm mx-auto">
+            Polymarket returned {markets.length} market{markets.length !== 1 ? "s" : ""} total,
+            but none matched the price-direction filter
+            {period !== "all" ? ` for the "${period}" period` : ""}.
+            Check the server terminal for [gamma] log lines.
+          </p>
+          <button
+            onClick={() => mutate()}
+            className="mt-2 text-xs text-zinc-500 underline hover:text-zinc-300"
+          >
+            Try again
+          </button>
         </div>
       )}
 
+      {/* Market list */}
       {!isLoading && !error && (
         <div className="space-y-3">
           {filtered.map((market) => (
