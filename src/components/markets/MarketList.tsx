@@ -121,72 +121,88 @@ export function MarketList() {
       {/* Empty */}
       {!isLoading && !error && markets !== undefined && filtered.length === 0 && (
         <div className="rounded-xl border border-zinc-800 p-6 text-center space-y-3">
-          <p className="text-zinc-400 font-medium">No directional markets found</p>
 
-          {diag ? (
-            <div className="text-left space-y-2">
-              {/* Summary row */}
-              <div className="flex gap-4 justify-center text-xs">
-                <span className={diag.rawTotal === 0 ? "text-red-400" : "text-amber-400"}>
-                  API returned: <strong>{diag.rawTotal}</strong> raw markets
-                  {diag.usingProxy ? " (via CORS proxy)" : " (direct)"}
-                </span>
-                <span className="text-zinc-500">→</span>
-                <span className="text-zinc-400">
-                  Directional filter: <strong>{diag.filteredTotal}</strong> matched
-                </span>
-              </div>
-
-              {diag.rawTotal === 0 ? (
-                <p className="text-xs text-red-500 text-center">
-                  Polymarket API is not reachable from your browser. Check the Network tab in DevTools
-                  for requests to gamma-api.polymarket.com or corsproxy.io.
-                </p>
-              ) : (
+          {/* ── Case A: period filter is the culprit ── */}
+          {markets.length > 0 && period !== "all" ? (
+            <>
+              <p className="text-zinc-400 font-medium">
+                No {period.toUpperCase()} markets in the current set
+              </p>
+              {diag?.periodBreakdown && (
                 <div className="space-y-1">
-                  <p className="text-xs text-amber-500 text-center">
-                    Got {diag.rawTotal} markets from Polymarket, but none have Up/Down/Higher/Lower/Above/Below outcomes.
-                    <br />
-                    Directional Yes/No markets (e.g. "Will BTC be higher?") are also included.
+                  <p className="text-xs text-zinc-500">
+                    {markets.length} directional markets matched — available durations:
                   </p>
+                  <div className="flex flex-wrap gap-2 justify-center">
+                    {(["5m","15m","1h","6h","1d","1w"] as const).map((p) => {
+                      const n = diag.periodBreakdown[p] ?? 0;
+                      return (
+                        <span
+                          key={p}
+                          className={`rounded-full px-2.5 py-1 text-xs font-medium uppercase ${
+                            n > 0
+                              ? "bg-zinc-700 text-zinc-200"
+                              : "bg-zinc-900 text-zinc-600"
+                          }`}
+                        >
+                          {p}: {n}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-zinc-600 pt-1">
+                    Select a period with available markets, or choose <strong>ALL</strong> to see everything.
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            /* ── Case B: no directional markets at all ── */
+            <>
+              <p className="text-zinc-400 font-medium">No directional markets found</p>
+              {diag && (
+                <div className="text-left space-y-2">
+                  <div className="flex gap-4 justify-center text-xs">
+                    <span className={diag.rawTotal === 0 ? "text-red-400" : "text-amber-400"}>
+                      API returned: <strong>{diag.rawTotal}</strong> raw markets
+                      {diag.usingProxy ? " (via CORS proxy)" : " (direct)"}
+                    </span>
+                    <span className="text-zinc-500">→</span>
+                    <span className="text-zinc-400">
+                      Directional filter: <strong>{diag.filteredTotal}</strong> matched
+                    </span>
+                  </div>
 
-                  {/* Expandable sample */}
-                  <button
-                    onClick={() => setShowDiag((v) => !v)}
-                    className="flex items-center gap-1 mx-auto text-xs text-zinc-500 hover:text-zinc-300"
-                  >
-                    {showDiag ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                    {showDiag ? "Hide" : "Show"} sample markets from API
-                  </button>
-
-                  {showDiag && diag.sampleOutcomes.length > 0 && (
-                    <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3 text-left space-y-1">
-                      {diag.sampleOutcomes.map((s, i) => (
-                        <p key={i} className="text-xs text-zinc-500 font-mono break-all">{s}</p>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Slug breakdown */}
-                  {showDiag && (
-                    <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3 text-left">
-                      <p className="text-xs text-zinc-600 mb-1">Per-slug counts:</p>
-                      {Object.entries(diag.slugBreakdown).map(([slug, count]) => (
-                        <p key={slug} className="text-xs text-zinc-500 font-mono">
-                          {slug}: {count}
-                        </p>
-                      ))}
+                  {diag.rawTotal === 0 ? (
+                    <p className="text-xs text-red-500 text-center">
+                      Polymarket API unreachable. Check DevTools → Network for gamma-api.polymarket.com.
+                    </p>
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="text-xs text-amber-500 text-center">
+                        {diag.filteredTotal === 0
+                          ? "Got markets but none have Up/Down/Higher/Lower/Above/Below outcomes or directional Yes/No questions about financial assets."
+                          : `${diag.filteredTotal} matched but all filtered by current search/period.`}
+                      </p>
+                      <button
+                        onClick={() => setShowDiag((v) => !v)}
+                        className="flex items-center gap-1 mx-auto text-xs text-zinc-500 hover:text-zinc-300"
+                      >
+                        {showDiag ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                        {showDiag ? "Hide" : "Show"} sample markets from API
+                      </button>
+                      {showDiag && diag.sampleOutcomes.length > 0 && (
+                        <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3 text-left space-y-1">
+                          {diag.sampleOutcomes.map((s, i) => (
+                            <p key={i} className="text-xs text-zinc-500 font-mono break-all">{s}</p>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
-            </div>
-          ) : (
-            <p className="text-zinc-600 text-xs max-w-sm mx-auto">
-              {markets.length === 0
-                ? "Polymarket returned 0 markets — check your browser's DevTools console (Network tab) for the request to gamma-api.polymarket.com."
-                : `${markets.length} markets from Polymarket but none matched the price-direction filter${period !== "all" ? ` for "${period}"` : ""}.`}
-            </p>
+            </>
           )}
 
           <button onClick={() => mutate()} className="text-xs text-zinc-500 underline hover:text-zinc-300">

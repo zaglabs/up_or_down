@@ -42,27 +42,44 @@ function parseAsset(q: string): string {
   return cap ? cap[1] : "ASSET";
 }
 
+function durationToPeriod(ms: number): MarketPeriod {
+  if (ms <=  8 * 60_000)       return "5m";
+  if (ms <= 20 * 60_000)       return "15m";
+  if (ms <=  2 * 3_600_000)    return "1h";
+  if (ms <= 12 * 3_600_000)    return "6h";
+  if (ms <=  2 * 86_400_000)   return "1d";
+  return "1w";
+}
+
 function parsePeriod(q: string, end: string, start: string): MarketPeriod {
   const ql = q.toLowerCase();
+  // Highest priority: explicit duration in the question text
   if (ql.match(/\b5[\s-]?min/))  return "5m";
   if (ql.match(/\b15[\s-]?min/)) return "15m";
-  if (ql.match(/\b30[\s-]?min/)) return "1h";  // treat 30m as 1h bucket
+  if (ql.match(/\b30[\s-]?min/)) return "1h";
   if (ql.match(/\b1[\s-]?h(our)?r?\b/) || ql.includes("hourly")) return "1h";
   if (ql.match(/\b[2-5][\s-]?h(our)?r?\b/)) return "6h";
-  if (ql.match(/\b6[\s-]?h(our)?r?\b/)) return "6h";
-  if (ql.match(/\b(daily|today|24[\s-]?h)/)) return "1d";
+  if (ql.match(/\b6[\s-]?h(our)?r?\b/))     return "6h";
   if (ql.match(/\b(weekly|this week|7[\s-]?day)/)) return "1w";
-  try {
-    const ms = new Date(end).getTime() - new Date(start).getTime();
-    if (ms > 0) {
-      if (ms <=  8 * 60_000)    return "5m";
-      if (ms <= 20 * 60_000)    return "15m";
-      if (ms <=  2 * 3_600_000) return "1h";
-      if (ms <= 12 * 3_600_000) return "6h";
-      if (ms <=  2 * 86_400_000) return "1d";
-      return "1w";
-    }
-  } catch {}
+  // "daily/today" in the question → 1d only if the window is genuinely multi-hour
+  // (we still fall through to the date-based check so a same-day market expiring
+  //  in 45 min isn't labelled 1d just because the word "today" appears)
+
+  const endMs   = new Date(end).getTime();
+  const startMs = new Date(start).getTime();
+  const nowMs   = Date.now();
+
+  // Use total market window (start → end) when startDate is valid
+  if (!isNaN(startMs) && !isNaN(endMs) && endMs > startMs) {
+    return durationToPeriod(endMs - startMs);
+  }
+
+  // startDate missing or invalid — fall back to time-remaining (now → end).
+  // A market expiring in 30 min is effectively a "1h" market to trade.
+  if (!isNaN(endMs) && endMs > nowMs) {
+    return durationToPeriod(endMs - nowMs);
+  }
+
   return "1d";
 }
 
@@ -250,6 +267,7 @@ export interface FetchDiagnostics {
   filteredTotal: number;
   usingProxy: boolean;
   slugBreakdown: Record<string, number>;
+  periodBreakdown: Record<string, number>;
   sampleOutcomes: string[];
   error?: string;
 }
@@ -351,6 +369,13 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
   storeDiag("filteredTotal", results.length);
   console.log(`[polymarket] after directional filter: ${results.length}`);
 
+  // Period breakdown — logged to console and surfaced in the UI
+  const periodBreakdown: Record<string, number> = {};
+  for (const r of results) {
+    periodBreakdown[r.period] = (periodBreakdown[r.period] ?? 0) + 1;
+  }
+  console.log("[polymarket] period breakdown:", periodBreakdown);
+
   const sampleOutcomes = raw.slice(0, 10).map((m: any) => {
     const outArr = parseArrayField(m.outcomes ?? m.tokens ?? []);
     const outStr = outArr.length
@@ -364,6 +389,7 @@ export async function fetchMarketsClient(category?: MarketCategory): Promise<UpD
     filteredTotal: results.length,
     usingProxy,
     slugBreakdown,
+    periodBreakdown,
     sampleOutcomes,
   };
 
